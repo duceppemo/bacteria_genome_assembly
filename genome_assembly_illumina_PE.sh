@@ -16,27 +16,27 @@ END
 
 
 #Analysis folder
-baseDir=""${HOME}"/analyses/SE_jiewen_virulence"
+export baseDir=""${HOME}"/analyses/SE_jiewen_virulence"
 
-export sample="H-H-1"
+# export sample="H-H-1"
 
 #reads
-reads="/media/6tb_raid10/data/SE_jiewen"
+export reads="/media/6tb_raid10/data/SE_jiewen"
 
 #program location
 export prog=""${HOME}"/prog"
-picard=""${prog}"/picard-tools/picard.jar"
+export picard=""${prog}"/picard-tools/picard.jar"
 
 #script location
-scripts=""${HOME}"/scripts"
+export scripts=""${HOME}"/scripts"
 
 # Centrifuge DB to use
-db="/media/6tb_raid10/db/centrifuge/p_compressed+h+v"
+export db="/media/6tb_raid10/db/centrifuge/p_compressed+h+v"
 # db="/media/6tb_raid10/db/centrifuge/nt"
 
 #Maximum number of cores used per sample for parallel processing
 #A highier value reduces the memory footprint.
-export maxProc=1
+export maxProc=6
 
 #k-mer size for SPAdes assembler (must be odd number(s))
 #Should be smaller that minimum trimmed read length
@@ -70,17 +70,18 @@ export email=marc-olivier.duceppe@inspection.gc.ca
 
 
 #Folder structure
-fastq=""${baseDir}"/fastq"
+export fastq=""${baseDir}"/fastq"
 export logs=""${baseDir}"/logs"
 export qc=""${baseDir}"/QC"
 export centrifugeOut=""${qc}"/centrifuge/raw"
+export kat=""${qc}"/kat"
 export genomescope=""${qc}"/genomescope/raw"
 export trimmed=""${baseDir}"/trimmed"
 export corrected=""${baseDir}"/corrected"
 export merged=""${baseDir}"/merged"
 export assembly=""${baseDir}"/assembly"
-export spadesOut=""${assembly}"/"${sample}""
-polished="${baseDir}"/polished
+# export spadesOut=""${assembly}"/"${sample}""
+export polished="${baseDir}"/polished
 blob=""${qc}"/blobtools"
 # scaffolded="${baseDir}"/scaffolded
 export annotation="${baseDir}"/annotation
@@ -96,12 +97,13 @@ export islandviewer=""${baseDir}"/islandviewer"
 [ -d "$logs" ] || mkdir -p "$logs"
 [ -d "$qc" ] || mkdir -p "$qc"
 [ -d "$centrifugeOut" ] || mkdir -p "$centrifugeOut"
+[ -d "$kat" ] || mkdir -p "$kat"
 [ -d "$genomescope" ] || mkdir -p "$genomescope"
 [ -d "$trimmed" ] || mkdir -p "$trimmed"
 [ -d "$corrected" ] || mkdir -p "$corrected"
 [ -d "$merged" ] || mkdir -p "$merged"
 [ -d "$assembly" ] || mkdir -p "$assembly"
-[ -d "$spadesOut" ] || mkdir -p "$spadesOut"
+# [ -d "$spadesOut" ] || mkdir -p "$spadesOut"
 [ -d "$polished" ] || mkdir -p "$polished"
 [ -d "$blob" ] || mkdir -p "$blob"
 # [ -d "$scaffolded" ] || mkdir -p "$scaffolded"
@@ -355,68 +357,86 @@ done
 #https://kat.readthedocs.io/en/latest/walkthrough.html
 
 # Output folder
-[ -d "${qc}"/kat/reads ] || mkdir -p "${qc}"/kat/reads
+[ -d "${kat}"/reads ] || mkdir -p "${kat}"/reads
 
 # KAT can't take compressed files as input
-find "$fastq" -type f -name "*.fastq.gz" \
-    | parallel --env qc "pigz -d -c {} > "${qc}"/kat/reads/{/.}"
+find -L "$fastq" -type f -name "*.fastq.gz" \
+    | parallel --env qc "pigz -d -c {} > "${kat}"/reads/{/.}"
+"${sample}"/
 
-raw1=$(find "${qc}"/kat/reads -type f -name "*R1*.fastq")
-raw2=$(find "${qc}"/kat/reads -type f -name "*R2*.fastq")
 
-# zcat "${fastq}"/*.fastq.gz > "${qc}"/kat/reads/"${sample}".fastq
-# combined=""${qc}"/kat/reads/"${sample}".fastq"
+function runKat()
+{
+    r1="$1"
+    r2=$(sed 's/_R1/_R2/' <<< "$r1")
 
-# GC plot on reads
-kat gcp \
-    -t "$cpu" \
-    -o "${qc}"/kat/reads/"$sample"_gcp \
-    "$raw1" "$raw2"
+    sample=$(cut -d "_" -f 1 <<< $(basename $r1))
+    
+    # GC plot on reads
+    kat gcp \
+        -t $((cpu/maxProc)) \
+        -o "${kat}"/"${sample}"/"$sample"_gcp \
+        "$r1" "$r2"
 
-# Redo gpc plot to add labels to axes
-kat plot density \
-    -o "${qc}"/kat/reads/"$sample"_gcp.mx.png \
-    --y_label "GC count" \
-    --x_label "K-mer multiplicity (R1 and R2 combines)" \
-    --z_label "Distinct K-mers per bin" \
-    "${qc}"/kat/reads/"$sample"_gcp.mx
+    # Redo gpc plot to add labels to axes
+    kat plot density \
+        -o "${kat}"/"${sample}"/"$sample"_gcp.mx.png \
+        --y_label "GC count" \
+        --x_label "K-mer multiplicity (R1 and R2 combines)" \
+        --z_label "Distinct K-mers per bin" \
+        "${kat}"/"${sample}"/"$sample"_gcp.mx
 
-# k-mer frequency
-kat hist \
-    -t "$cpu" \
-    -o "${qc}"/kat/reads/"$sample"_histo \
-    "$raw1" "$raw2"
+    # k-mer frequency
+    kat hist \
+        -t $((cpu/maxProc)) \
+        -o "${kat}"/"${sample}"/"$sample"_histo \
+        "$r1" "$r2"
 
-# Redo histo to add labels to axes
-kat plot spectra-hist\
-    -o "${qc}"/kat/reads/"$sample"_histo.png \
-    --y_label "Count" \
-    --x_label "K-mer multiplicity" \
-    "${qc}"/kat/reads/"$sample"_histo
+    # Redo histo to add labels to axes
+    kat plot spectra-hist\
+        -o "${kat}"/"${sample}"/"$sample"_histo.png \
+        --y_label "Count" \
+        --x_label "K-mer multiplicity" \
+        "${kat}"/"${sample}"/"$sample"_histo
 
-# Compare R1 vs R2
-kat comp \
-    -t "$cpu" \
-    -o "${qc}"/kat/reads/"$sample" \
-    "$raw1" "$raw2"
+    # Compare R1 vs R2
+    kat comp \
+        -t $((cpu/maxProc)) \
+        -o "${kat}"/"${sample}"/"$sample" \
+        "$r1" "$r2"
 
-# density plot R1 vs R2
-kat plot density \
-    -o "${qc}"/kat/reads/"${sample}"_r1_vs_r2.png \
-    --y_label "K-mer multiplicity for $(basename "${raw2%.*}")" \
-    --x_label "K-mer multiplicity for $(basename "${raw1%.*}")" \
-    --z_label "Distinct K-mers per bin" \
-    "${qc}"/kat/reads/"${sample}"-main.mx
+    # density plot R1 vs R2
+    kat plot density \
+        -o "${kat}"/"${sample}"/"${sample}"_r1_vs_r2.png \
+        --y_label "K-mer multiplicity for $(basename "${r2%.*}")" \
+        --x_label "K-mer multiplicity for $(basename "${r1%.*}")" \
+        --z_label "Distinct K-mers per bin" \
+        "${kat}"/"${sample}"/"${sample}"-main.mx
 
-kat plot spectra-mx \
-    -o "${qc}"/kat/reads/"${sample}"_spectra-mx.png \
-    --intersection \
-    --y_label "27-mer multiplicity for $(basename "${raw2%.*}")" \
-    --x_label "27-mer multiplicity for $(basename "${raw1%.*}")" \
-    "${qc}"/kat/reads/"${sample}"-main.mx
+    kat plot spectra-mx \
+        -o "${kat}"/"${sample}"/"${sample}"_spectra-mx.png \
+        --intersection \
+        --y_label "27-mer multiplicity for $(basename "${r2%.*}")" \
+        --x_label "27-mer multiplicity for $(basename "${r1%.*}")" \
+        "${kat}"/"${sample}"/"${sample}"-main.mx
+}
+
+#make function available to parallel
+export -f runKat
+
+# run samples in parallel
+find "${kat}"/reads -type f -name "*R1*.fastq" \
+    | parallel  --bar \
+                --env runKat \
+                --env cpu \
+                --env kat \
+                --env maxProc \
+                --jobs "$maxProc" \
+                'runKat {}'
 
 # Cleanup
-find "${qc}"/kat/reads -type f \
+rm -rf "$kat"/reads
+find "$kat" -type f \
     | grep -vE ".png|.stats" \
     | xargs rm -r
 
@@ -433,23 +453,24 @@ function genomeStats()
     r1="$1"
     r2=$(sed 's/_R1_/_R2_/' <<< "$r1")
 
-    name="$(basename "$1")" #name without path
-    sampleName="$(cut -d "_" -f 1 <<< "${name%%.*}")" #nameR1 with the ".fastq.gz"
+    sample=$(cut -d "_" -f 1 <<< $(basename $r1))
+
+    [ -d "${genomescope}"/"$sample" ] || mkdir -p "${genomescope}"/"$sample"
 
     zcat "$r1" "$r2"\
         | jellyfish count \
             -s "$mem" \
             -m 21 \
             -C \
-            -t 8 \
-            -o "${genomescope}"/"${sampleName}".jf \
+            -t $((cpu/maxProc)) \
+            -o "${genomescope}"/"${sample}"/"${sample}".jf \
             -L 3 \
             /dev/stdin
 
     jellyfish histo \
-        -t 8 \
-        -o "${genomescope}"/"${sampleName}".histo \
-        "${genomescope}"/"${sampleName}".jf
+        -t $((cpu/maxProc)) \
+        -o "${genomescope}"/"${sample}"/"${sample}".histo \
+        "${genomescope}"/"${sample}"/"${sample}".jf
 
     read_length=$(zcat "$1" \
         | head -n 4 \
@@ -458,32 +479,36 @@ function genomeStats()
         | wc -m)
 
     Rscript "${prog}"/genomescope/genomescope.R \
-        "${genomescope}"/"${sampleName}".histo \
+        "${genomescope}"/"${sample}"/"${sample}".histo \
         21 \
         "$read_length" \
-        "${genomescope}"/"${sampleName}"
+        "${genomescope}"/"${sample}"
 }
 
 export -f genomeStats
 
-find "$data" -type f -name "*_R1_*" |
-parallel    --bar \
-            --env genomeStats \
-            --env output \
-            --env mem \
-            -j 6 \
-            'genomeStats {}'
+find -L "$fastq" -type f -name "*_R1*" |
+    parallel    --bar \
+                --env genomeStats \
+                --env output \
+                --env mem \
+                --env cpu \
+                --env maxProc \
+                --env genomescope \
+                --jobs "$maxProc" \
+                'genomeStats {}'
 
+# Make coverage report
 for i in $(find "$genomescope" -type f -name "model.txt"); do
     name="$(dirname "$i")"
-    sampleName=$(basename "$name")
+    sample=$(basename "$name")
 
     coverage=$(cat "$i" \
                 | grep -E "^kmercov" \
                 | tr -s " " \
                 | cut -d " " -f 2)
     cov=$(printf '%.0f' "$coverage")
-    echo -e ""$sampleName"\t"$cov"" >> "${genomescope}"/coverages.txt
+    echo -e ""$sample"\t"$cov"" >> "${genomescope}"/coverages.txt
 done
 
 
@@ -494,22 +519,22 @@ done
 ################
 
 
-# output folder
-[ -d "${qc}"/prinseq/reads ] || mkdir -p "${qc}"/prinseq/reads
+# # output folder
+# [ -d "${qc}"/prinseq/reads ] || mkdir -p "${qc}"/prinseq/reads
 
-# 
-zcat $(find "$fastq" -type f -name "*.fastq.gz") | \
-prinseq-lite \
-    -verbose \
-    -fastq stdin \
-    -graph_data "${qc}"/prinseq/reads/"${sample}".gd \
-    -out_good null \
-    -out_bad nul
+# # 
+# zcat $(find "$fastq" -type f -name "*.fastq.gz") | \
+# prinseq-lite \
+#     -verbose \
+#     -fastq stdin \
+#     -graph_data "${qc}"/prinseq/reads/"${sample}".gd \
+#     -out_good null \
+#     -out_bad nul
 
-prinseq-graphs \
-    -i "${qc}"/prinseq/reads/"${sample}".gd \
-    -png_all \
-    -o "${qc}"/prinseq/reads
+# prinseq-graphs \
+#     -i "${qc}"/prinseq/reads/"${sample}".gd \
+#     -png_all \
+#     -o "${qc}"/prinseq/reads
 
 
 #################
@@ -648,10 +673,6 @@ find -L "$corrected" -type f -name "*.fastq.gz" -name "*_1P*" \
                 --jobs "$maxProc" \
                 'merge {}'
 
-m1=""${merged}"/"${sample}"_merged.fastq.gz"  # merged
-u11=""${merged}"/"${sample}"_unmerged_1P.fastq.gz"  # unmerged R1
-u12=""${merged}"/"${sample}"_unmerged_2P.fastq.gz"  # unmerged R2
-
 
 #####################
 #                   #
@@ -660,16 +681,41 @@ u12=""${merged}"/"${sample}"_unmerged_2P.fastq.gz"  # unmerged R2
 #####################
 
 
-spades.py \
-    --only-assembler \
-    -t "$cpu" \
-    -m "$mem" \
-    -k "$kmer" \
-    --careful \
-    --s1 "$m1" \
-    --pe1-1 "$u11" \
-    --pe1-2 "$u12" \
-    -o "$spadesOut"
+function assemble()
+{
+    sample=$(basename "$1" | cut -d '_' -f 1)
+
+    m1=""${merged}"/"${sample}"_merged.fastq.gz"  # merged
+    u11="$1" # ""${merged}"/"${sample}"_unmerged_1P.fastq.gz"  # unmerged R1
+    u12=$(sed 's/_1P/_2P/' <<< "$u11")  #""${merged}"/"${sample}"_unmerged_2P.fastq.gz"  # unmerged R2
+
+    spadesOut=""${assembly}"/"${sample}""
+
+    spades.py \
+        --only-assembler \
+        -t $((cpu/maxProc)) \
+        -m "$mem" \
+        -k "$kmer" \
+        --careful \
+        --s1 "$m1" \
+        --pe1-1 "$u11" \
+        --pe1-2 "$u12" \
+        -o "$spadesOut"
+}
+
+#make function available to parallel
+export -f assemble  # -f is to export functions
+
+find -L "$merged" -type f -name "*.fastq.gz" -name "*_1P*" \
+    | parallel  --env assemble \
+                --env maxProc \
+                --env cpu \
+                --env memJ \
+                --env merged \
+                --env kmer \
+                --env logs \
+                --jobs "$maxProc" \
+                'assemble {}'
 
 
 #################
@@ -680,100 +726,90 @@ spades.py \
 
 
 # Using Pilon
+function polish()
+{
+    genome="$1"
 
-#remap reads onto assembly
-genome="${spadesOut}"/scaffolds.fasta
-bwa index "$genome"
+    path=$(dirname "$genome")
+    sample=$(basename "$path")
 
-# map corrected pair-end reads
-# for i in $(find "$corrected" -type f -name "*.fastq.gz"); do
-#     r1="$i"
-#     r2=$(sed 's/_1P/_2P/' <<< "$r1")
-#     name=$(cut -d "_" -f 1 <<< $(basename "$i"))
+    #remap reads onto assembly
+    bwa index "$genome"
 
-#     bwa mem -x intractg -t "$cpu" -r 1 -a -M "$genome" "$r1" "$r2" | \
-#         samtools view -@ "$cpu" -b -h -F 4 - | \
-#         samtools sort -@ "$cpu" -m 10G -o "${polished}"/"${name}"_unmerged.bam -
+    [ -d "${polished}"/"$sample" ] || mkdir -p "${polished}"/"$sample"
 
-#     # remove duplicates for paired-end reads
-#     samtools rmdup \
-#         "${polished}"/"${name}".bam \
-#         "${polished}"/"${name}"_nodup.bam
-
-#     #clean up
-#     rm "${polished}"/"${name}".bam
-# done
-
-#map merged (single end) reads
-for i in $(find "$merged" -type f -name "*_merged.fastq.gz"); do
-    name=$(cut -d "_" -f 1 <<< $(basename "$i"))
-
-    bwa mem -x intractg -t "$cpu" -r 1 -a -M "$genome" "$i" | \
-        samtools view -@ "$cpu" -b -h -F 4 - | \
-        samtools sort -@ "$cpu" -m 10G -o "${polished}"/"${name}"_merged.bam -
+    #map merged (single end) reads  
+    bwa mem -x intractg -t $((cpu/maxProc)) -r 1 -a -M "$genome" "${merged}"/"${sample}"_merged.fastq.gz | \
+        samtools view -@ $((cpu/maxProc)) -b -h -F 4 - | \
+        samtools sort -@ $((cpu/maxProc)) -m 10G -o "${polished}"/"${sample}"/"${sample}"_merged.bam -
 
     # remove duplicates for sinle-end reads
     java -Xmx64g -jar "$picard" MarkDuplicates \
-        INPUT="${polished}"/"${name}"_merged.bam \
-        OUTPUT="${polished}"/"${name}"_merged_nodup.bam \
-        METRICS_FILE="${polished}"/"${name}"_merged_duplicates.txt \
+        INPUT="${polished}"/"${sample}"/"${sample}"_merged.bam \
+        OUTPUT="${polished}"/"${sample}"/"${sample}"_merged_nodup.bam \
+        METRICS_FILE="${polished}"/"${sample}"/"${sample}"_merged_duplicates.txt \
         ASSUME_SORTED=true \
         REMOVE_DUPLICATES=true
 
-    #remove bam with duplicates
-    rm "${polished}"/"${name}"_merged.bam
-done
+    # Merge and sort all merged files
+    samtools sort -@ $((cpu/maxProc)) -m 10G \
+        -o "${polished}"/"${sample}"/"${sample}"_merged_sorted.bam \
+        "${polished}"/"${sample}"/"${sample}"_merged_nodup.bam
 
-# Merge and sort all merged files from bbmerge
-samtools merge -@ "$cpu" \
-    - \
-    $(find "$polished" -type f -name "*_merged*" -name "*nodup*" | tr "\n" " ") | \
-    samtools sort -@ "$cpu" -m 10G -o "${polished}"/"${sample}"_merged.bam -
+    # index bam file
+    samtools index "${polished}"/"${sample}"/"${sample}"_merged_sorted.bam
 
-# index bam file
-samtools index "${polished}"/"${sample}"_merged.bam
-
-#map unmerged (paired-end) reads
-for i in $(find "$merged" -type f -name "*_unmerged_1P.fastq.gz"); do
-    r1="$i"
-    r2=$(sed 's/_1P/_2P/' <<< "$r1")
-    name=$(cut -d "_" -f 1 <<< $(basename "$i"))
-
-    bwa mem -x intractg -t "$cpu" -r 1 -a -M "$genome" "$r1" "$r2" | \
-        samtools view -@ "$cpu" -b -h -F 4 - | \
-        samtools sort -@ "$cpu" -m 10G -o "${polished}"/"${name}"_unmerged.bam -
+    #map unmerged (paired-end) reads
+    bwa mem -x intractg -t $((cpu/maxProc)) -r 1 -a -M "$genome" "${merged}"/"${sample}"_unmerged_1P.fastq.gz "${merged}"/"${sample}"_unmerged_2P.fastq.gz | \
+        samtools view -@ $((cpu/maxProc)) -b -h -F 4 - | \
+        samtools sort -@ $((cpu/maxProc)) -m 10G -o "${polished}"/"${sample}"/"${sample}"_unmerged.bam -
 
     # remove duplicates for paired-end reads
     samtools rmdup \
-        "${polished}"/"${name}"_unmerged.bam \
-        "${polished}"/"${name}"_unmerged_nodup.bam
+        "${polished}"/"${sample}"/"${sample}"_unmerged.bam \
+        "${polished}"/"${sample}"/"${sample}"_unmerged_nodup.bam
 
-    #remove bam with duplicates
-    rm "${polished}"/"${name}"_unmerged.bam
-done
+    # Merge and sort all unmerged files from bbmerge
+    samtools sort -@ $((cpu/maxProc)) -m 10G \
+        -o "${polished}"/"${sample}"/"${sample}"_unmerged_sorted.bam \
+        "${polished}"/"${sample}"/"${sample}"_unmerged_nodup.bam
 
-# Merge and sort all unmerged files from bbmerge
-samtools merge -@ "$cpu" \
-    - \
-    $(find "$polished" -type f -name "*_unmerged*" -name "*nodup*" | tr "\n" " ") | \
-    samtools sort -@ "$cpu" -m 10G -o "${polished}"/"${sample}"_unmerged.bam -
+    # index bam file
+    samtools index "${polished}"/"${sample}"/"${sample}"_unmerged_sorted.bam
 
-# index bam file
-samtools index "${polished}"/"${sample}"_unmerged.bam
+    #cleanup
+    # find "${polished}"/"${sample}" -type f -name "*.nodup.bam" -delete
+    # find "${polished}"/"${sample}" -type f -name "*.merged.bam" -delete
 
-#cleanup
-rm "${polished}"/*nodup.bam
+    #Correct contigs using pilon based on the Illumina reads
+    # java "$memJava" -XX:+UseConcMarkSweepGC -XX:-UseGCOverheadLimit \
+    java "$memJava" -jar "${prog}"/pilon/pilon-dev.jar \
+        --threads $((cpu/maxProc)) \
+        --genome "$genome" \
+        --unpaired "${polished}"/"${sample}"/"${sample}"_merged_sorted.bam \
+        --frags "${polished}"/"${sample}"/"${sample}"_unmerged_sorted.bam \
+        --outdir "${polished}"/"${sample}" \
+        --output "${sample}"_pilon \
+        --changes
 
-#Correct contigs using pilon based on the Illumina reads
-# java "$memJava" -XX:+UseConcMarkSweepGC -XX:-UseGCOverheadLimit \
-java "$memJava" -jar "${prog}"/pilon/pilon-dev.jar \
-    --threads "$cpu" \
-    --genome "$genome" \
-    --unpaired "${polished}"/"${sample}"_merged.bam \
-    --frags "${polished}"/"${sample}"_unmerged.bam \
-    --outdir "$polished" \
-    --output "${sample}"_pilon \
-    --changes
+    #clean up
+    ls "${polished}"/"$sample" | grep -v "pilon" | xargs rm
+}
+
+export -f polish
+
+find "$assembly" -maxdepth 2 -type f -name "scaffolds.fasta" \
+    | parallel  --bar \
+                --env polish \
+                --env merged \
+                --env cpu \
+                --env maxProc \
+                --env polished \
+                --env picard \
+                --env memJava \
+                --env prog \
+                --jobs "$maxProc" \
+                'polish {}'
 
 
 #########################
@@ -1004,49 +1040,49 @@ quast.py \
 
 
 # Create output folder
-[ -d "${qc}"/kat/assembly ] || mkdir -p "${qc}"/kat/assembly
+[ -d "${kat}"/assembly ] || mkdir -p "${kat}"/assembly
 
 find "$trimmed" -type f -name "*.fastq.gz" \
-    | parallel --env qc "pigz -d -c {} > "${qc}"/kat/assembly/{/.}"
+    | parallel --env qc "pigz -d -c {} > "${kat}"/assembly/{/.}"
 
 # Stats per contig
 kat sect \
     -t "$cpu" \
-    -o "${qc}"/kat/assembly/"$sample" \
+    -o "${kat}"/assembly/"$sample" \
     --output_gc_stats \
     "${polished}"/"${sample}"_ordered.fasta \
-    "${qc}"/kat/assembly/"${sample}"_Trimmed_?P.fastq
+    "${kat}"/assembly/"${sample}"_Trimmed_?P.fastq
 
-[ -d "${qc}"/kat/assembly/coverage ] || mkdir -p "${qc}"/kat/assembly/coverage
-[ -d "${qc}"/kat/assembly/gc ] || mkdir -p "${qc}"/kat/assembly/gc
+[ -d "${kat}"/assembly/coverage ] || mkdir -p "${kat}"/assembly/coverage
+[ -d "${kat}"/assembly/gc ] || mkdir -p "${kat}"/assembly/gc
 
 function kat_profile()
 {
     node=$(cut -d "_" -f 2 <<< "$1")  # Works for SPAdes assemblies ("NODE_9_length_5363_cov_1554.3")
     
     kat plot profile \
-        -o "${qc}"/kat/assembly/coverage/"${sample}"_NODE_"${node}".png \
+        -o "${kat}"/assembly/coverage/"${sample}"_NODE_"${node}".png \
         --header=$(tr -d ">" <<< "$1") \
         --y_label "K-mer frequency" \
         --x_label "Position (bp)" \
-        "${qc}"/kat/assembly/"${sample}"-counts.cvg
+        "${kat}"/assembly/"${sample}"-counts.cvg
 
     kat plot profile \
-        -o "${qc}"/kat/assembly/gc/"${sample}"_NODE_"${node}".png \
+        -o "${kat}"/assembly/gc/"${sample}"_NODE_"${node}".png \
         --header=$(tr -d ">" <<< "$1") \
         --y_label "GC percentage" \
         --x_label "Position" \
-        "${qc}"/kat/assembly/"${sample}"-counts.gc
+        "${kat}"/assembly/"${sample}"-counts.gc
 }
 
 # make function available to parallel
 export -f kat_profile
 
 for i in $(cat "${polished}"/"${sample}"_ordered.fasta | grep -E "^>"); do
-    echo "$i" >> "${qc}"/kat/assembly/contig.list
+    echo "$i" >> "${kat}"/assembly/contig.list
 done
 
-cat "${qc}"/kat/assembly/contig.list \
+cat "${kat}"/assembly/contig.list \
     | parallel  --env kat_profile \
                 --env qc \
                 --env sample \
@@ -1054,31 +1090,31 @@ cat "${qc}"/kat/assembly/contig.list \
 
 # kat plot spectra-mx \
 #     --intersection \
-#     -o "${qc}"/kat/assembly/"${sample}"_spectra-mx.png \
-#     "${qc}"/kat/assembly/"${sample}"-main.mx
+#     -o "${kat}"/assembly/"${sample}"_spectra-mx.png \
+#     "${kat}"/assembly/"${sample}"-main.mx
 
 # genome assembly analysis
 # both paired-end compared as one group
 kat comp \
     -t "$cpu" \
-    -o "${qc}"/kat/assembly/"${sample}"_pe_vs_asm \
-    ""${qc}"/kat/assembly/"${sample}"_Trimmed_?P.fastq" \
+    -o "${kat}"/assembly/"${sample}"_pe_vs_asm \
+    ""${kat}"/assembly/"${sample}"_Trimmed_?P.fastq" \
     "${polished}"/"${sample}"_ordered.fasta
 
 # Rename axes
 kat plot spectra-cn \
-    -o "${qc}"/kat/assembly/"${sample}"_pe_vs_asm-main.mx.spectra-cn.png \
+    -o "${kat}"/assembly/"${sample}"_pe_vs_asm-main.mx.spectra-cn.png \
     --y_label "Number of distinct K-mers" \
     --x_label "K-mer multiplicity" \
-    "${qc}"/kat/assembly/"${sample}"_pe_vs_asm-main.mx
+    "${kat}"/assembly/"${sample}"_pe_vs_asm-main.mx
 
 kat_distanalysis.py \
-    --plot "${qc}"/kat/assembly/"${sample}"_pe_vs_asm-main.mx \
-    | tee "${qc}"/kat/assembly/"${sample}"_decompostion_analysis.stats
+    --plot "${kat}"/assembly/"${sample}"_pe_vs_asm-main.mx \
+    | tee "${kat}"/assembly/"${sample}"_decompostion_analysis.stats
 
 
 # Cleanup
-find "${qc}"/kat/assembly -maxdepth 1 -type f \
+find "${kat}"/assembly -maxdepth 1 -type f \
     | grep -vE ".png|stats" \
     | xargs rm -r
 
@@ -1640,3 +1676,4 @@ else:
         for chunk in r2:
             f.write(chunk)
 END
+
