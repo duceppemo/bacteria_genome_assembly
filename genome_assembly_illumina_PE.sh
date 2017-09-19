@@ -7,6 +7,8 @@ https://github.com/tseemann/shovill
 
 END
 
+# TODO -> make pipeline work with multiple sequencing runs per sample
+
 
 ######################
 #                    #
@@ -17,8 +19,6 @@ END
 
 #Analysis folder
 export baseDir=""${HOME}"/analyses/SE_jiewen_virulence"
-
-# export sample="H-H-1"
 
 #reads
 export reads="/media/6tb_raid10/data/SE_jiewen"
@@ -43,12 +43,12 @@ export maxProc=6
 export kmer="21,33,55,77,99,127"
 
 # Assembly trimming
-smallest_contig=200
+export smallest_contig=200
 
 # Annotation
 kingdom="Bacteria"
-genus="Salmonella "
-species="enterica subsp. enterica serovar Heidelberg"
+genus="Salmonella"
+species="enterica" # subsp. enterica serovar Heidelberg"
 strain="HH1"
 tag="XX000"
 centre="NCBI"
@@ -60,6 +60,18 @@ export biosample="SAMX00000000"
 export token="21a9f2b6-b6a4-b07a-6b55-9e065e9aa362"  # Make sure it's still active. Must login first. http://www.pathogenomics.sfu.ca/islandviewer/user/token/
 export email=marc-olivier.duceppe@inspection.gc.ca
 
+
+######################
+#                    #
+#     Resources      #
+#                    #
+######################
+
+
+#computer performance
+export cpu=$(nproc) #total number of cores
+export mem=$(($(grep MemTotal /proc/meminfo | awk '{print $2}')*85/100000000)) #85% of total memory in GB
+export memJava="-Xmx"$mem"g"
 
 
 #######################
@@ -80,9 +92,9 @@ export trimmed=""${baseDir}"/trimmed"
 export corrected=""${baseDir}"/corrected"
 export merged=""${baseDir}"/merged"
 export assembly=""${baseDir}"/assembly"
-# export spadesOut=""${assembly}"/"${sample}""
 export polished="${baseDir}"/polished
-blob=""${qc}"/blobtools"
+export ordered="${baseDir}"/ordered
+export blob=""${qc}"/blobtools"
 # scaffolded="${baseDir}"/scaffolded
 export annotation="${baseDir}"/annotation
 export phaster=""${baseDir}"/phaster"
@@ -103,26 +115,13 @@ export islandviewer=""${baseDir}"/islandviewer"
 [ -d "$corrected" ] || mkdir -p "$corrected"
 [ -d "$merged" ] || mkdir -p "$merged"
 [ -d "$assembly" ] || mkdir -p "$assembly"
-# [ -d "$spadesOut" ] || mkdir -p "$spadesOut"
 [ -d "$polished" ] || mkdir -p "$polished"
+[ -d "$ordered" ] || mkdir -p "$ordered"
 [ -d "$blob" ] || mkdir -p "$blob"
 # [ -d "$scaffolded" ] || mkdir -p "$scaffolded"
 [ -d "$annotation" ] || mkdir -p "$annotation"
 [ -d "$phaster" ] || mkdir -p "$phaster"
 [ -d "$islandviewer" ] || mkdir -p "$islandviewer"
-
-
-######################
-#                    #
-#     Resources      #
-#                    #
-######################
-
-
-#computer performance
-export cpu=$(nproc) #total number of cores
-export mem=$(($(grep MemTotal /proc/meminfo | awk '{print $2}')*85/100000000)) #85% of total memory in GB
-export memJava="-Xmx"$mem"g"
 
 
 #######################
@@ -773,7 +772,7 @@ function polish()
     samtools sort -@ $((cpu/maxProc)) -m 10G \
         -o "${polished}"/"${sample}"/"${sample}"_unmerged_sorted.bam \
         "${polished}"/"${sample}"/"${sample}"_unmerged_nodup.bam
-
+        
     # index bam file
     samtools index "${polished}"/"${sample}"/"${sample}"_unmerged_sorted.bam
 
@@ -788,12 +787,12 @@ function polish()
         --genome "$genome" \
         --unpaired "${polished}"/"${sample}"/"${sample}"_merged_sorted.bam \
         --frags "${polished}"/"${sample}"/"${sample}"_unmerged_sorted.bam \
-        --outdir "${polished}"/"${sample}" \
+        --outdir "${polished}"/"$sample" \
         --output "${sample}"_pilon \
         --changes
 
     #clean up
-    ls "${polished}"/"$sample" | grep -v "pilon" | xargs rm
+    find "${polished}"/"$sample" -type f | grep -v "pilon" | xargs rm
 }
 
 export -f polish
@@ -819,12 +818,23 @@ find "$assembly" -maxdepth 2 -type f -name "scaffolds.fasta" \
 #########################
 
 
-# Remove contigs smaller than 200bp
-perl "${prog}"/phage_typing/removesmallscontigs.pl \
-    "$smallest_contig" \
-    "${polished}"/"${sample}"_pilon.fasta \
-    > "${polished}"/"${sample}"_pilon"${smallest_contig}".fasta
+function trimAssembly()
+{
+    # Remove contigs smaller than 200bp
+    perl "${prog}"/phage_typing/removesmallscontigs.pl \
+        "$smallest_contig" \
+        "$1" \
+        > "${1%.fasta}""${smallest_contig}".fasta
+}
 
+export -f trimAssembly
+
+find "${polished}" -type f -name "*_pilon.fasta" \
+    | parallel  --bar \
+                --env prog \
+                --env smallest_contig \
+                --jobs "$maxProc" \
+                'trimAssembly {}'
 
 
 :<<'END'
@@ -915,64 +925,94 @@ END
 #######################
 
 
-# Find ResSeq closest genome
-
 # Folder to store refseq genomes
-[ -d "${polished}"/refseq ] || mkdir -p "${polished}"/refseq
+[ -d "${ordered}"/refseq ] || mkdir -p "${ordered}"/refseq
 
 # Download all assemblies from species
 bash "${scripts}"/get_assemblies.sh \
     -q ""$genus" "$species"" \
-    -t refseq \
-    -a "Complete Genome" \
-    -o "${polished}"/refseq \
-    -r
+    -t 'refseq' \
+    -a 'Complete Genome' \
+    -o ""${ordered}"/refseq"
 
-# Use mash to find closest genome from refseq
-bash "${scripts}"/findClosest.sh \
-    "${polished}"/refseq \
-    "${polished}"/"${sample}"_pilon"${smallest_contig}".fasta
+# Find ResSeq closest genome
+function orderContigs()
+{
+    path=$(dirname "$1")
+    sample=$(basename "$path")
 
-# The closest is the top one
-closest=$(cat "${polished}"/refseq/"${sample}"_pilon"${smallest_contig}".distance.tsv | head -n 1 | cut -f 1)
+    # Use mash to find closest genome from refseq
+    bash "${scripts}"/findClosest.sh \
+        "${ordered}"/refseq \
+        "$1" \
+        $((cpu/maxProc))
 
-#its score out of 1000
-score=$(cat "${polished}"/refseq/"${sample}"_pilon"${smallest_contig}".distance.tsv | head -n 1 | cut -f 6)
+    # The closest is the top one
+    closest=$(cat "${ordered}"/refseq/"${sample}"_pilon"${smallest_contig}".distance.tsv | head -n 1 | cut -f 1)
 
-# dont order contigs if not at least 80% similar
-if [ "$score" -gt 800 ]; then
+    #its score out of 1000
+    score=$(cat "${ordered}"/refseq/"${sample}"_pilon"${smallest_contig}".distance.tsv | head -n 1 | cut -f 6)
 
-    # Use Mauve in batch mode to order contigs with closest genome
-    pigz -d "$closest"
-    java "$memJava" -cp "${prog}"/mauve_snapshot_2015-02-13/Mauve.jar \
-        org.gel.mauve.contigs.ContigOrderer \
-        -output "${polished}"/ordered \
-        -ref "${closest%.gz}" \
-        -draft "${polished}"/"${sample}"_pilon"${smallest_contig}".fasta
+    #Add information to log
+    echo ""$sample" closest genome is "$(basename "${closest%.*}")" with a score of "$score"/1000" | tee -a "${logs}"/log.txt
 
-    #fix formating of Mauve output
-    #find out how many "alignment" folder there is
-    n=$(find "${polished}"/ordered -maxdepth 1 -type d | sed '1d' | wc -l)
+    [ -d "${ordered}"/"$sample" ] || mkdir -p "${ordered}"/"$sample"
 
-    # Need to be fixed to avoid sorting
-    perl "${scripts}"/formatFasta.pl \
-        -i "${sample}"_pilon"${smallest_contig}".fasta \
-        -o "${polished}"/"${sample}"_ordered.fasta \
-        -w 80
+    # dont order contigs if closest genome is not at least 80% similar
+    # if [ "$score" -gt 800 ]; then
+        # Use Mauve in batch mode to order contigs with closest genome
+        [ -s "${closest%.gz}" ] || pigz -d -k "$closest"  # decompress if not present
+        java "$memJava" -cp "${prog}"/mauve_snapshot_2015-02-13/Mauve.jar \
+            org.gel.mauve.contigs.ContigOrderer \
+            -output "${ordered}"/mauve/"$sample" \
+            -ref "${closest%.gz}" \
+            -draft "$1"
+
+        #fix formating of Mauve output
+        #find out how many "alignment" folder there is
+        n=$(find "${ordered}"/mauve/"$sample" -maxdepth 1 -type d | sed '1d' | wc -l)
+
+        # reformat with no sorting
+        perl "${scripts}"/formatFasta.pl \
+            -i "${ordered}"/mauve/"${sample}"/alignment"${n}"/"${sample}"_pilon"${smallest_contig}".fasta \
+            -o "${ordered}"/"${sample}"/"${sample}"_ordered.fasta \
+            -w 80
+
+    # else
+    #     perl "${scripts}"/formatFasta.pl \
+    #         -i "$1" \
+    #         -o "${ordered}"/"${sample}"/"${sample}"_ordered.fasta \
+    #         -w 80
+    # fi
+
+    [ -d "${qc}"/mauve/"$sample" ] || mkdir -p "${qc}"/mauve/"$sample"
 
     #align with progessiveMauve
-    [ -d "${qc}"/mauve ] || mkdir -p "${qc}"/mauve
-
     "${prog}"/mauve_snapshot_2015-02-13/linux-x64/./progressiveMauve \
-        --output="${qc}"/mauve/"${sample}"_ordered.xmfa \
-        "${closest%.gz}.fna" \
-        "${polished}"/"${sample}"_ordered.fasta
-else
-    perl "${scripts}"/formatFasta.pl \
-        -i "${polished}"/"${sample}"_pilon.fasta \
-        -o "${polished}"/"${sample}"_ordered.fasta \
-        -w 80
-fi
+        --output="${qc}"/mauve/"${sample}"/"${sample}"_ordered.xmfa \
+        "${closest%.gz}" \
+        "${ordered}"/"${sample}"/"${sample}"_ordered.fasta
+}
+
+export -f orderContigs
+
+find "${polished}" -type f -name "*_pilon"${smallest_contig}".fasta" \
+    | parallel  --bar \
+                --env orderContigs \
+                --env scripts \
+                --env ordered \
+                --env memJava \
+                --env prog \
+                --env qc \
+                --env logs \
+                --env smallest_contig \
+                --jobs "$maxProc" \
+                'orderContigs {}'
+
+#cleanup
+rm -rf "${ordered}"/mauve
+rm -rf "${ordered}"/refseq
+find "$ordered" -type f -name "*.sslist" -exec rm {} +
 
 
 ###################
@@ -983,53 +1023,54 @@ fi
 
 
 #QUAST
-
-quast.py \
-    -s \
-    -o "${qc}"/quast \
-    -t "$cpu" \
-    "${polished}"/"${sample}"_ordered.fasta
-
-# #All the genomes compared
-# [ -e "${assembly}"/list.txt ] && rm "${assembly}"/list.txt
-# for i in $(find "$assembly" -type f -name "*_assembly.fasta"); do 
-#     echo "$i" >> "${assembly}"/list.txt
-# done
-
-# ARRAY=($(cat "${assembly}"/list.txt))
-# list=$(echo "${ARRAY[@]}")
-
 # quast.py \
 #     -s \
 #     -o "${qc}"/quast \
 #     -t "$cpu" \
-#     $list  # don't put in quotes
+#     "${polished}"/"${sample}"_ordered.fasta
 
-# # Make quast report on individual assembly
-# function runQuast()
-# {
-#     sample=$(basename "$1" | cut -d '_' -f 1)
+# [ -d "${qc}"/quast ] || mkdir -p "${qc}"/quast
 
-#     quast.py \
-#         -t $((cpu/maxProc)) \
-#         -o "${assembly}"/"${sample}"/quast \
-#         -s \
-#         -L \
-#         "$1"  # don't put in quotes
-# }
+#All the genomes compared
+declare -a ARRAY=()
+for i in $(find "$ordered" -type f -name "*_ordered.fasta"); do 
+    ARRAY+=("$i")
+done
 
-# #make function available to parallel
-# export -f runQuast  # -f is to export functions
+quast.py \
+    --scaffolds \
+    --output-dir "${qc}"/quast \
+    --threads "$cpu" \
+    ${ARRAY[@]}
+    # $list  # don't put in quotes
 
-# #run paired-end merging on multiple samples in parallel
-# find "$assembly" -type f -name "*_assembly_trimmed1000.fasta" \
-#     | parallel  --env runQuast \
-#                 --env maxProc \
-#                 --env cpu \
-#                 --env assembly \
-#                 --env logs \
-#                 --jobs "$maxProc" \
-#                 "runQuast {}"
+# Make quast report on individual assembly
+function runQuast()
+{
+    sample=$(basename "$1" | cut -d '_' -f 1)
+
+    [ -d "${qc}"/quast/"$sample" ] || mkdir -p "${qc}"/quast/"$sample"
+
+    quast.py \
+        -t $((cpu/maxProc)) \
+        -o "${qc}"/quast/"$sample" \
+        -s \
+        -L \
+        $1  # don't put in quotes
+}
+
+#make function available to parallel
+export -f runQuast  # -f is to export functions
+
+#run paired-end merging on multiple samples in parallel
+find "$ordered" -type f -name "*_ordered.fasta" \
+    | parallel  --bar \
+                --env runQuast \
+                --env maxProc \
+                --env cpu \
+                --env qc \
+                --jobs "$maxProc" \
+                "runQuast {}"
 
 
 ###########
@@ -1042,8 +1083,24 @@ quast.py \
 # Create output folder
 [ -d "${kat}"/assembly ] || mkdir -p "${kat}"/assembly
 
+function uncompressReads ()
+{
+    name=$(basename "${1%.*}")
+    sample=$(cut -d "_" -f 1 <<< "$name")
+    [ -d "${kat}"/assembly/"$sample" ] || mkdir -p "${kat}"/assembly/"$sample"
+    pigz -d -c "$1" > "${kat}"/assembly/"${sample}"/"$name"
+}
+
+export -f uncompressReads
+
 find "$trimmed" -type f -name "*.fastq.gz" \
-    | parallel --env qc "pigz -d -c {} > "${kat}"/assembly/{/.}"
+    | parallel  --bar \
+                --env kat \
+                --jobs "$maxProc" \
+                "uncompressReads {}"
+
+
+#TODO -> finish the rest of KAT on genome assembly
 
 # Stats per contig
 kat sect \
@@ -1126,115 +1183,128 @@ find "${kat}"/assembly -maxdepth 1 -type f \
 #################
 
 
-genome=""${polished}"/"${sample}"_ordered.fasta"
-bwa index "$genome"
-
 # Activate blobtools virtual environment
 source "${HOME}"/my_virtualenv/blob_env/bin/activate
 
-# map trimmed and corrected reads to assembly
-for i in $(find "$corrected" -type f -name "*_Trimmed_1P.fastq.gz"); do
-    r1="$i"
-    r2=$(sed 's/_1P/_2P/' <<< "$r1")
-    name=$(cut -d "_" -f 1 <<< $(basename "$i"))
+function runBlobtools ()
+{
+    sample=$(basename "$1" | cut -d "_" -f 1)
+    genome="$1"
 
-    bwa mem -x intractg -t "$cpu" -r 1 -a -M "$genome" "$r1" "$r2" | \
-        samtools view -@ "$cpu" -b -h -F 4 - | \
-        samtools sort -@ "$cpu" -m 10G -o "${blob}"/"${name}".bam -
+    #index genome
+    bwa index "$genome"
+
+    # map trimmed and corrected reads to assembly
+    r1=""${corrected}"/"${sample}"_Trimmed_1P.fastq.gz"
+    r2=$(sed 's/_1P/_2P/' <<< "$r1")
+
+    [ -d "${blob}"/"$sample" ] || mkdir -p "${blob}"/"$sample"
+
+    bwa mem -x intractg -t $((cpu/maxProc)) -r 1 -a -M "$genome" "$r1" "$r2" | \
+        samtools view -@ $((cpu/maxProc)) -b -h -F 4 - | \
+        samtools sort -@ $((cpu/maxProc)) -m 10G -o "${blob}"/"${sample}"/"${sample}".bam -
 
     # remove duplicates for paired-end reads
     samtools rmdup \
-        "${blob}"/"${name}".bam \
-        "${blob}"/"${name}"_nodup.bam
+        "${blob}"/"${sample}"/"${sample}".bam \
+        "${blob}"/"${sample}"/"${sample}"_nodup.bam
 
     # index bam files
-    samtools index "${blob}"/"${name}"_nodup.bam
+    samtools index "${blob}"/"${sample}"/"${sample}"_nodup.bam
 
     # Cleanup
-    rm "${blob}"/"${name}".bam
-done
+    rm "${blob}"/"${sample}"/"${sample}".bam
 
-# Merge and sort bam files
-if [ $(find "$blob" -type f -name "*._nodup.bam" | wc -l) -gt 1 ]; then
-    samtools merge -@ "$cpu" - $(find "$blob" -type f -name "*_nodup.bam" | tr "\n" " ") | \
-    samtools sort -@ "$cpu" -m 10G -o "${blob}"/"${sample}".bam -
+    samtools sort -@ $((cpu/maxProc)) -m 10G \
+        -o "${blob}"/"${sample}"/"${sample}".bam \
+        "${blob}"/"${sample}"/"${sample}"_nodup.bam
 
     #Cleanup
-    rm "${blob}"/*nodup.bam*
-else
-    samtools sort -@ "$cpu" -m 10G -o "${blob}"/"${sample}".bam "${blob}"/"${sample}"_nodup.bam
-fi
+    rm "${blob}"/"${sample}"/*nodup.bam*
 
-#Cleanup
-rm "${blob}"/*nodup.bam*
+    #index bam file
+    samtools index "${blob}"/"${sample}"/"${sample}".bam
 
-#index bam file
-samtools index "${blob}"/"${sample}".bam
+    # Make coverage file from bam
+    blobtools map2cov \
+        -i "$genome" \
+        -b "${blob}"/"${sample}"/"${sample}".bam \
+        -o "${blob}"/"${sample}"/
 
-# Make coverage file from bam
-blobtools map2cov \
-    -i "$genome" \
-    -b "${blob}"/"${sample}".bam \
-    -o "${blob}"/
+    #blast assembly on nt
+    blastn \
+        -task megablast \
+        -query "$genome" \
+        -db nt \
+        -out "${blob}"/"${sample}"/"${sample}".blast_nt.tsv \
+        -outfmt '6 qseqid staxids bitscore std sscinames sskingdoms stitle' \
+        -culling_limit 5 \
+        -evalue 1e-25 \
+        -num_threads $((cpu/maxProc))
 
-#blast assembly on nt
-blastn \
-    -task megablast \
-    -query "$genome" \
-    -db nt \
-    -out "${blob}"/"${sample}".blast_nt.tsv \
-    -outfmt '6 qseqid staxids bitscore std sscinames sskingdoms stitle' \
-    -culling_limit 5 \
-    -evalue 1e-25 \
-    -num_threads "$cpu"
+    # Create BlobDB
+    blobtools create \
+        -i "$genome" \
+        -c "${blob}"/"${sample}"/"${sample}".bam.cov \
+        -t "${blob}"/"${sample}"/"${sample}".blast_nt.tsv \
+        -o "${blob}"/"${sample}"/"${sample}"
 
-# Create BlobDB
-blobtools create \
-    -i "$genome" \
-    -c "${blob}"/"${sample}".bam.cov \
-    -t "${blob}"/"${sample}".blast_nt.tsv \
-    -o "${blob}"/"${sample}"
+    # Print BlobDB as a table
+    blobtools view \
+        -i "${blob}"/"${sample}"/"${sample}".blobDB.json \
+        -o "${blob}"/"${sample}"/
 
-# Print BlobDB as a table
-blobtools view \
-    -i "${blob}"/"${sample}".blobDB.json \
-    -o "${blob}"/
+    # Colour a covplot by GC-categories
+    # Extract sequenceID and GC
+    grep -v '^#' "${blob}"/"${sample}"/"${sample}".blobDB.table.txt \
+        | cut -f 1,3 \
+        > "${blob}"/"${sample}"/"${sample}".blobDB.id.gc.txt
 
-# Colour a covplot by GC-categories
-# Extract sequenceID and GC
-grep -v '^#' "${blob}"/"${sample}".blobDB.table.txt \
-    | cut -f 1,3 \
-    > "${blob}"/"${sample}".blobDB.id.gc.txt
-
-# Divide into GC categories 
-i=0
-division=5
-while [ "$i" -lt 105 ]; do
-    # echo "$i"
-    cat "${blob}"/"${sample}".blobDB.id.gc.txt \
-        | awk -v count="$i" -v div="$division" '
-        BEGIN {OFS = ","}
-        {
-            if (($2 * 100) >= count && ($2 * 100) < (count + div))
+    # Divide into GC categories 
+    i=0
+    division=5
+    while [ "$i" -lt 105 ]; do
+        # echo "$i"
+        cat "${blob}"/"${sample}"/"${sample}".blobDB.id.gc.txt \
+            | awk -v count="$i" -v div="$division" '
+            BEGIN {OFS = ","}
             {
-                $2 = count"-"(count + (div - 1))"%"
-                print
-            }
-        }' >> "${blob}"/"${sample}".blobDB.id.gc.catcolour.txt
-    let i=$i+division
-done
+                if (($2 * 100) >= count && ($2 * 100) < (count + div))
+                {
+                    $2 = count"-"(count + (div - 1))"%"
+                    print
+                }
+            }' >> "${blob}"/"${sample}"/"${sample}".blobDB.id.gc.catcolour.txt
+        let i=$i+division
+    done
 
-# Generate covplot with colour by %GC categories
-blobtools covplot \
-    -i "${blob}"/"${sample}".blobDB.json \
-    -c "${blob}"/"${sample}".bam.cov \
-    --catcolour "${blob}"/"${sample}".blobDB.id.gc.catcolour.txt \
-    -o "${blob}"/
+    # Generate covplot with colour by %GC categories
+    blobtools covplot \
+        -i "${blob}"/"${sample}"/"${sample}".blobDB.json \
+        -c "${blob}"/"${sample}"/"${sample}".bam.cov \
+        --catcolour "${blob}"/"${sample}"/"${sample}".blobDB.id.gc.catcolour.txt \
+        -o "${blob}"/"${sample}"/
 
-# Plot BlobDB as a blobplot
-blobtools blobplot \
-  -i "${blob}"/"${sample}".blobDB.json \
-  -o "${blob}"/
+    # Plot BlobDB as a blobplot
+    blobtools blobplot \
+      -i "${blob}"/"${sample}"/"${sample}".blobDB.json \
+      -o "${blob}"/"${sample}"/
+
+    #cleanup (only keep the image files)
+    find "${blob}"/"$sample" -type f | grep -vF ".png" | xargs rm
+}
+
+export -f runBlobtools
+
+find "${ordered}"/ -type f -name "*_ordered.fasta" \
+    | parallel  --bar \
+                --env runBlobtools \
+                --env cpu \
+                --env maxProc \
+                --env blob \
+                --env corrected \
+                --jobs "$maxProc" \
+                'runBlobtools {}'
 
 # Deactivate the virtual environment
 deactivate
@@ -1676,4 +1746,3 @@ else:
         for chunk in r2:
             f.write(chunk)
 END
-
