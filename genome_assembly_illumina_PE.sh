@@ -45,14 +45,16 @@ export kmer="21,33,55,77,99,127"
 # Assembly trimming
 export smallest_contig=200
 
+export size=3000000
+
 # Annotation
-kingdom="Bacteria"
-genus="Salmonella"
-species="enterica" # subsp. enterica serovar Heidelberg"
-strain="HH1"
-tag="XX000"
-centre="NCBI"
-gram="neg"
+export kingdom="Bacteria"
+export genus="Salmonella"
+export species="enterica" # subsp. enterica serovar Heidelberg"
+export strain="XXX"
+export tag="XX000"
+export centre="NCBI"
+export gram="neg"
 export bioproject="PRJNX000000"
 export biosample="SAMX00000000"
 
@@ -269,7 +271,6 @@ else
 fi
 
 # GenomeScope
-# TODO
 
 
 ########################
@@ -339,7 +340,7 @@ for i in $(find -L "$fastq" -maxdepth 1 -type f -name "*_R1*"); do
 
     cat "${qc}"/centrifuge/raw/"${sample}"/"${sample}".tsv | \
         cut -f 1,3 | \
-        ktImportTaxonomy /dev/stdin -o  "${qc}"/centrifuge/raw/"${sample}"/"${sample}".html
+        ktImportTaxonomy /dev/stdin -o "${qc}"/centrifuge/raw/"${sample}"/"${sample}".html
 
     #visualize the resutls in Firefow browser
     # firefox file://"${qc}"/centrifuge/raw/"${sample}"/"${sample}".html &
@@ -602,8 +603,9 @@ function correct()
     lighter \
         -od "$corrected" \
         -r "$r1"\
-        -K 23 3000000 \
-        -t "$cpu" \
+        -K 23 "$size" \
+        -t $((cpu/maxProc)) \
+        -zlib 9 \
         2> >(tee "${logs}"/correct/"${filename%%.*}".txt)
 
     #rename as before
@@ -738,7 +740,7 @@ function polish()
     [ -d "${polished}"/"$sample" ] || mkdir -p "${polished}"/"$sample"
 
     #map merged (single end) reads  
-    bwa mem -x intractg -t $((cpu/maxProc)) -r 1 -a -M "$genome" "${merged}"/"${sample}"_merged.fastq.gz | \
+    bwa mem -t $((cpu/maxProc)) -r 1 -a -M "$genome" "${merged}"/"${sample}"_merged.fastq.gz | \
         samtools view -@ $((cpu/maxProc)) -b -h -F 4 - | \
         samtools sort -@ $((cpu/maxProc)) -m 10G -o "${polished}"/"${sample}"/"${sample}"_merged.bam -
 
@@ -759,7 +761,7 @@ function polish()
     samtools index "${polished}"/"${sample}"/"${sample}"_merged_sorted.bam
 
     #map unmerged (paired-end) reads
-    bwa mem -x intractg -t $((cpu/maxProc)) -r 1 -a -M "$genome" "${merged}"/"${sample}"_unmerged_1P.fastq.gz "${merged}"/"${sample}"_unmerged_2P.fastq.gz | \
+    bwa mem -t $((cpu/maxProc)) -r 1 -a -M "$genome" "${merged}"/"${sample}"_unmerged_1P.fastq.gz "${merged}"/"${sample}"_unmerged_2P.fastq.gz | \
         samtools view -@ $((cpu/maxProc)) -b -h -F 4 - | \
         samtools sort -@ $((cpu/maxProc)) -m 10G -o "${polished}"/"${sample}"/"${sample}"_unmerged.bam -
 
@@ -1102,78 +1104,91 @@ find "$trimmed" -type f -name "*.fastq.gz" \
 
 #TODO -> finish the rest of KAT on genome assembly
 
-# Stats per contig
-kat sect \
-    -t "$cpu" \
-    -o "${kat}"/assembly/"$sample" \
-    --output_gc_stats \
-    "${polished}"/"${sample}"_ordered.fasta \
-    "${kat}"/assembly/"${sample}"_Trimmed_?P.fastq
+# # Stats per contig
+# kat sect \
+#     -t "$cpu" \
+#     -o "${kat}"/assembly/"$sample" \
+#     --output_gc_stats \
+#     "${polished}"/"${sample}"_ordered.fasta \
+#     "${kat}"/assembly/"${sample}"_Trimmed_?P.fastq
 
-[ -d "${kat}"/assembly/coverage ] || mkdir -p "${kat}"/assembly/coverage
-[ -d "${kat}"/assembly/gc ] || mkdir -p "${kat}"/assembly/gc
+# [ -d "${kat}"/assembly/coverage ] || mkdir -p "${kat}"/assembly/coverage
+# [ -d "${kat}"/assembly/gc ] || mkdir -p "${kat}"/assembly/gc
 
-function kat_profile()
-{
-    node=$(cut -d "_" -f 2 <<< "$1")  # Works for SPAdes assemblies ("NODE_9_length_5363_cov_1554.3")
+# function kat_profile()
+# {
+#     node=$(cut -d "_" -f 2 <<< "$1")  # Works for SPAdes assemblies ("NODE_9_length_5363_cov_1554.3")
     
-    kat plot profile \
-        -o "${kat}"/assembly/coverage/"${sample}"_NODE_"${node}".png \
-        --header=$(tr -d ">" <<< "$1") \
-        --y_label "K-mer frequency" \
-        --x_label "Position (bp)" \
-        "${kat}"/assembly/"${sample}"-counts.cvg
+#     kat plot profile \
+#         -o "${kat}"/assembly/coverage/"${sample}"_NODE_"${node}".png \
+#         --header=$(tr -d ">" <<< "$1") \
+#         --y_label "K-mer frequency" \
+#         --x_label "Position (bp)" \
+#         "${kat}"/assembly/"${sample}"-counts.cvg
 
-    kat plot profile \
-        -o "${kat}"/assembly/gc/"${sample}"_NODE_"${node}".png \
-        --header=$(tr -d ">" <<< "$1") \
-        --y_label "GC percentage" \
-        --x_label "Position" \
-        "${kat}"/assembly/"${sample}"-counts.gc
-}
+#     kat plot profile \
+#         -o "${kat}"/assembly/gc/"${sample}"_NODE_"${node}".png \
+#         --header=$(tr -d ">" <<< "$1") \
+#         --y_label "GC percentage" \
+#         --x_label "Position" \
+#         "${kat}"/assembly/"${sample}"-counts.gc
+# }
 
-# make function available to parallel
-export -f kat_profile
+# # make function available to parallel
+# export -f kat_profile
 
-for i in $(cat "${polished}"/"${sample}"_ordered.fasta | grep -E "^>"); do
-    echo "$i" >> "${kat}"/assembly/contig.list
-done
+# for i in $(cat "${polished}"/"${sample}"_ordered.fasta | grep -E "^>"); do
+#     echo "$i" >> "${kat}"/assembly/contig.list
+# done
 
-cat "${kat}"/assembly/contig.list \
-    | parallel  --env kat_profile \
-                --env qc \
-                --env sample \
-                'kat_profile {}'
+# cat "${kat}"/assembly/contig.list \
+#     | parallel  --env kat_profile \
+#                 --env qc \
+#                 --env sample \
+#                 'kat_profile {}'
 
-# kat plot spectra-mx \
-#     --intersection \
-#     -o "${kat}"/assembly/"${sample}"_spectra-mx.png \
-#     "${kat}"/assembly/"${sample}"-main.mx
+
 
 # genome assembly analysis
 # both paired-end compared as one group
-kat comp \
-    -t "$cpu" \
-    -o "${kat}"/assembly/"${sample}"_pe_vs_asm \
-    ""${kat}"/assembly/"${sample}"_Trimmed_?P.fastq" \
-    "${polished}"/"${sample}"_ordered.fasta
+function katAssembly ()
+{
+    sample=$(basename "$1" | cut -d "_" -f 1)
 
-# Rename axes
-kat plot spectra-cn \
-    -o "${kat}"/assembly/"${sample}"_pe_vs_asm-main.mx.spectra-cn.png \
-    --y_label "Number of distinct K-mers" \
-    --x_label "K-mer multiplicity" \
-    "${kat}"/assembly/"${sample}"_pe_vs_asm-main.mx
+    kat comp \
+    -t $((cpu/maxProc)) \
+    -o "${kat}"/assembly/"${sample}"/"${sample}"_pe_vs_asm \
+    ""${kat}"/assembly/"${sample}"/"${sample}"_Trimmed_?P.fastq" \
+    "$1"
 
-kat_distanalysis.py \
-    --plot "${kat}"/assembly/"${sample}"_pe_vs_asm-main.mx \
-    | tee "${kat}"/assembly/"${sample}"_decompostion_analysis.stats
+    # Rename axes
+    kat plot spectra-cn \
+        -o "${kat}"/assembly/"${sample}"/"${sample}"_pe_vs_asm-main.mx.spectra-cn.png \
+        --y_label "Number of distinct K-mers" \
+        --x_label "K-mer multiplicity" \
+        "${kat}"/assembly/"${sample}"/"${sample}"_pe_vs_asm-main.mx
 
+    kat_distanalysis.py \
+        -o "${kat}"/assembly/"${sample}"/"${sample}" \
+        "${kat}"/assembly/"${sample}"/"${sample}"_pe_vs_asm-main.mx \
+        | tee "${kat}"/assembly/"${sample}"/"${sample}"_decompostion_analysis.stats
+}
+
+export -f katAssembly
+
+find "${ordered}"/ -type f -name "*_ordered.fasta" \
+    | parallel  --bar \
+                --env katAssembly \
+                --env cpu \
+                --env maxProc \
+                --env kat \
+                --jobs "$maxProc" \
+                'katAssembly {}'
 
 # Cleanup
 find "${kat}"/assembly -maxdepth 1 -type f \
     | grep -vE ".png|stats" \
-    | xargs rm -r
+    | xargs rm
 
 
 #################
@@ -1292,6 +1307,7 @@ function runBlobtools ()
 
     #cleanup (only keep the image files)
     find "${blob}"/"$sample" -type f | grep -vF ".png" | xargs rm
+    find "${ordered}"/"$sample" -type f -name "*.fasta.*" -exec rm {} +
 }
 
 export -f runBlobtools
@@ -1317,7 +1333,7 @@ deactivate
 ###############
 
 
-function assemblyTrimm()
+function assemblyTrim()
 {
     name=$(basename "$1")
     sample=$(cut -d '_' -f 1 <<< "$name")
@@ -1342,22 +1358,38 @@ function assemblyTrimm()
 }
 
 #make function available to parallel
-export -f assemblyTrimm  # -f is to export functions
+export -f assemblyTrim  # -f is to export functions
 
 #run trimming on multiple assemblies in parallel
-find "$polished" -type f -name "*_ordered.fasta" \
-    | parallel --env assemblyTrimm --env prog 'assemblyTrimm {}'
+find "$ordered" -type f -name "*_ordered.fasta" \
+    | parallel  --bar \
+                --env assemblyTrim \
+                --env prog \
+                --jobs "$maxProc" \
+                'assemblyTrim {}'
 
 #submit to phaster
-for i in $(find "$polished" -type f | grep -E "trimmed1500|trimmed2000"); do
-    sample=$(basename "$i" | cut -d '_' -f 1)
+function phasterSubmit()
+{
+    sample=$(basename "$1" | cut -d '_' -f 1)
 
-    # {"job_id":"ZZ_7aed0446a6","status":"You're next!..."}
-    wget --post-file="$i" \
+    wget --post-file="$1" \
         http://phaster.ca/phaster_api?contigs=1 \
         -O "${phaster}"/"${sample}"_query.json \
         -o "${phaster}"/"${sample}"_wget.log
+}
+
+
+# Submit samples to PHASTER
+total=$(find "$ordered" -type f -name "*_ordered_trimmed*.fasta" | wc -l)
+counter=0
+for i in $(find "$ordered" -type f -name "*_ordered_trimmed*.fasta"); do
+    let counter=counter+1
+    echo -ne "Progress: "${counter}"/"${total}"\r"
+
+    phasterSubmit "$i"
 done
+
 
 
 function phasterResults()
@@ -1420,28 +1452,45 @@ function phasterResults()
 #make function available to parallel
 export -f phasterResults  # -f is to export functions
 
-find "$polished" -type f | grep -E "trimmed1500|trimmed2000" \
+find "$ordered" -type f | grep -E "trimmed1500|trimmed2000" \
     | parallel --bar --delay 0.3 --env phasterResults --env phaster 'phasterResults {}'
 
-#unzip phaster result file
-unzip "${phaster}"/"${sample}"_phaster.zip -d "$phaster"
+#reformat phaster output
+function extractPhasterInfo ()
+{
+    sample=$(cut -d "_" -f 1 <<< $(basename "$1"))
 
-#Convert summary.txt to tsv format
-cat "${phaster}"/summary.txt \
-    | sed '1,/gi|/d' \
-    | awk '{$1=$1;print}' \
-    | sed '/^-/d' \
-    | tr " " "\t" \
-    > "${phaster}"/summary.tsv
+    #unzip phaster result file
+    [ -d "${phaster}"/"$sample" ] || mkdir -p "${phaster}"/"$sample"
+    unzip "$1" -d "${phaster}"/"${sample}"
 
-#Convert detail.txt to tsv format
-cat "${phaster}"/detail.txt \
-    | sed -e '/^-/d' -e 's/  /@/g' \
-    | tr -s '@' \
-    | sed 's/@ /@/' \
-    | tr -s '[:space:]+' \
-    | tr "@" "\t" \
-    > "${phaster}"/summary.tsv
+    #Convert summary.txt to tsv format
+    cat "${phaster}"/"${sample}"/summary.txt \
+        | sed '1,/gi|/d' \
+        | awk '{$1=$1;print}' \
+        | sed '/^-/d' \
+        | tr " " "\t" \
+        > "${phaster}"/"${sample}"/"${sample}"_summary.tsv
+
+    #Convert detail.txt to tsv format
+    cat "${phaster}"/"${sample}"/detail.txt \
+        | sed -e '/^-/d' -e 's/  /@/g' \
+        | tr -s '@' \
+        | sed 's/@ /@/' \
+        | tr -s '[:space:]+' \
+        | tr "@" "\t" \
+        > "${phaster}"/"${sample}"/"${sample}"_detail.tsv
+}
+
+export -f extractPhasterInfo
+
+find "$phaster" -type f -name "*_phaster.zip" \
+    | parallel  --bar \
+                --env extractPhasterInfo \
+                --env phaster \
+                --jobs "$maxProc" \
+                'extractPhasterInfo {}'
+
 
 
 #########################
@@ -1452,43 +1501,55 @@ cat "${phaster}"/detail.txt \
 
 
 # Detect contigs part of a plasmid
-
-# # PlasmidFinder -> https://cge.cbs.dtu.dk/services/PlasmidFinder/  ???
 [ -d "${qc}"/plasmid ] || mkdir -p "${qc}"/plasmid
 
-# perl  "${prog}"/plasmidfinder/plasmidfinder.pl \
-#     -d "${prog}"/plasmidfinder/database \
-#     -p enterobacteriaceae,gram_positive \
-#     -o "${qc}"/plasmid \
-#     -k 95.00 \
-#     -i "${polished}"/"${sample}"_assembly_trimmed"${smallest_contig}".fasta
+function detectPlasmid ()
+{
+    sample=$(cut -d "_" -f 1 <<< $(basename "$1"))
 
-# -task megablast \
-# Using blast
-blastn \
-    -query "${polished}"/"${sample}"_ordered.fasta \
-    -db nt \
-    -outfmt '6 qseqid sseqid stitle pident length mismatch gapopen qstart qend sstart send evalue bitscore' \
-    -evalue 1e-25 \
-    -num_threads "$cpu" \
-    -culling_limit 5 \
-    -max_target_seqs 5 \
-    -out "${qc}"/plasmid/"${sample}".blastn
+    [ -d "${qc}"/plasmid/"$sample" ] || mkdir -p "${qc}"/plasmid/"$sample"
 
-if [[ -n $(cat "${qc}"/plasmid/"${sample}".blastn | grep -i "plasmid") ]]; then
-    echo -e "\nPlasmid(s) detected in "$sample" assembly\n" | tee -a "${logs}"/log.txt
+    # Using blast
+    blastn \
+        -query "${ordered}"/"${sample}"/"${sample}"_ordered.fasta \
+        -db nt \
+        -outfmt '6 qseqid sseqid stitle pident length mismatch gapopen qstart qend sstart send evalue bitscore' \
+        -evalue 1e-25 \
+        -num_threads $((cpu/maxProc)) \
+        -culling_limit 5 \
+        -max_target_seqs 5 \
+        -out "${qc}"/plasmid/"${sample}"/"${sample}".blastn
 
-    # Create report for plasmid detection
-    echo -e "Contig(s) from "$sample" assembly identified as plasmid:\n" | tee -a "${qc}"/plasmid/plasmid.txt
-    
-    cat "${qc}"/plasmid/"${sample}".blastn \
-        | grep -i "plasmid" \
-        | cut -f 1,3 \
-        | sort -u -k1,1 \
-        | tee -a "${qc}"/plasmid/plasmid.txt
-else
-    echo -e "\nNo plasmid detected in "$sample" assembly\n" | tee -a "${logs}"/log.txt
-fi
+    if [[ -n $(cat "${qc}"/plasmid/"${sample}"/"${sample}".blastn | grep -i "plasmid") ]]; then
+        echo "Plasmid(s) detected in "$sample" assembly" \
+            | tee -a "${logs}"/log.txt
+
+        # Create report for plasmid detection
+        echo -e "Contig(s) from "$sample" assembly identified as plasmid:\n" \
+            | tee -a "${qc}"/plasmid/"${sample}"/plasmid.txt
+        
+        cat "${qc}"/plasmid/"${sample}"/"${sample}".blastn \
+            | grep -i "plasmid" \
+            | cut -f 1,3 \
+            | sort -u -k1,1 \
+            | tee -a "${qc}"/plasmid/"${sample}"/plasmid.txt
+    else
+        echo "No plasmid detected in "$sample" assembly" \
+            | tee -a "${logs}"/log.txt
+    fi
+}
+
+export -f detectPlasmid
+
+find "$ordered" -type f -name "*_ordered.fasta" \
+    | parallel  --bar \
+                --env detectPlasmid \
+                --env ordered \
+                --env qc \
+                --env cpu \
+                --env maxProc \
+                --jobs "$maxProc" \
+                'detectPlasmid {}'
 
 
 ##################
@@ -1498,81 +1559,108 @@ fi
 ##################
 
 
-# https://www.ncbi.nlm.nih.gov/genbank/genomesubmit_annotation/
-prokka  --outdir "${annotation}"/"$bioproject" \
-        --force \
-        --compliant \
-        --prefix "$biosample" \
-        --locustag "$tag" \
-        --centre "$centre" \
-        --kingdom "$kingdom" \
-        --genus "$genus" \
-        --species "$species" \
-        --strain "$strain" \
-        --gram "$gram" \
-        --cpus "$cpu" \
-        "${polished}"/"${sample}"_ordered.fasta
+function annotate ()
+{
+    sample=$(cut -d "_" -f 1 <<< $(basename "$1"))
+
+    # [ -d "${annotation}"/"$sample" ] || mkdir -p "${annotation}"/"$sample"
+
+    # https://www.ncbi.nlm.nih.gov/genbank/genomesubmit_annotation/
+    prokka  --outdir "${annotation}"/"$sample" \
+            --force \
+            --compliant \
+            --prefix "$sample" \
+            --locustag "$tag" \
+            --centre "$centre" \
+            --kingdom "$kingdom" \
+            --genus "$genus" \
+            --species "$species" \
+            --strain "$sample" \
+            --gram "$gram" \
+            --cpus $((cpu/maxProc)) \
+            "$1"
+
+    #extract hypothetical proteins
+    cat "${annotation}"/"${sample}"/"${sample}".faa | \
+        awk '{if(substr($0,1,1)==">"){if (p){print "\n";} print $0} else printf("%s",$0);p++;}END{print "\n"}' | \
+        grep --no-group-separator -A 1 -F "hypothetical protein" \
+        > "${annotation}"/"${sample}"/"${sample}"_hypoth.faa
+
+    echo -e "Number of hypothetical proteins found by Prokka: $(cat "${annotation}"/"${sample}"/"${sample}"_hypoth.faa | grep -ic "hypothetical")" \
+        | tee -a "${logs}"/log.txt
+
+    echo -n "Blasting hypothetical proteins on NR..."
+
+    #make sure $BLASTDB is set in environment variables
+    # export BLASTDB=/media/3tb_hdd/db/nr:/media/3tb_hdd/db/nt
+    blastp -query "${annotation}"/"${sample}"/"${sample}"_hypoth.faa \
+        -db nr \
+        -outfmt '6 qseqid sseqid stitle pident length mismatch gapopen qstart qend sstart send evalue bitscore' \
+        -evalue 1e-30 \
+        -max_target_seqs 1 \
+        -num_threads $((cpu/maxProc)) \
+        > "${annotation}"/"${sample}"/"${sample}"_hypoth.blastp
+
+    #Fetch the fasta entry of the hits that do not contain "hypothetical"
+    #Re-filter for evalues
+    cat "${annotation}"/"${sample}"/"${sample}"_hypoth.blastp | \
+        grep -viF "hypothetical" | \
+        awk '{if($12 < 1e-30) {print}}' | \
+        cut -f 2 | \
+        cut -d "|" -f4 \
+        > "${annotation}"/"${sample}"/accession.list
+
+    #Download the sequences
+    perl "${scripts}"/http_post.pl \
+        "${annotation}"/"${sample}"/accession.list \
+        "${annotation}"/"${sample}"/extra_hits.fasta
+    # esearch -db protein -query "$(cat "${spadesOut}"/annotation/accession.list)" | \
+    #     efetch -db protein -format fasta \
+    #     > "${spadesOut}"/annotation/extra_hits.fasta
 
 
+    #relaunch Prokka annotation with the new positive blast hit fasta file as reference
+    prokka  --outdir "${annotation}"/"$sample" \
+            --force \
+            --compliant \
+            --prefix "$sample" \
+            --locustag "$tag" \
+            --centre "$centre" \
+            --kingdom "$kingdom" \
+            --genus "$genus" \
+            --species "$species" \
+            --strain "$sample" \
+            --gram "$gram" \
+            --cpus $((cpu/maxProc)) \
+            --rfam \
+            --proteins "${annotation}"/"${sample}"/extra_hits.fasta \
+            "$1"
 
-#extract hypothetical proteins
-cat "${annotation}"/"${bioproject}"/"${biosample}".faa | \
-    awk '{if(substr($0,1,1)==">"){if (p){print "\n";} print $0} else printf("%s",$0);p++;}END{print "\n"}' | \
-    grep --no-group-separator -A 1 -F "hypothetical protein" \
-    > "${annotation}"/"${bioproject}"/"${biosample}"_hypoth.faa
+    echo -e "Number of hypothetical proteins remaining after the BLAST (1e-30): $(cat "${annotation}"/"${sample}"/"${sample}".faa | grep -ic "hypothetical")" \
+        | tee -a "${logs}"/log.txt
+}
 
-echo -e "Number of hypothetical proteins found by Prokka: $(cat "${annotation}"/"${bioproject}"/"${biosample}"_hypoth.faa | grep -ic "hypothetical")" \
-    | tee -a "${logs}"/log.txt
+export -f annotate
 
-echo -n "Blasting hypothetical proteins on NR..."
-
-#make sure $BLASTDB is set in environment variables
-# export BLASTDB=/media/3tb_hdd/db/nr:/media/3tb_hdd/db/nt
-blastp -query "${annotation}"/"${bioproject}"/"${biosample}"_hypoth.faa \
-    -db nr \
-    -outfmt '6 qseqid sseqid stitle pident length mismatch gapopen qstart qend sstart send evalue bitscore' \
-    -evalue 1e-30 \
-    -max_target_seqs 1 \
-    -num_threads "$cpu" \
-    > "${annotation}"/"${bioproject}"/"${biosample}"_hypoth.blastp
-
-#Fetch the fasta entry of the hits that do not contain "hypothetical"
-#Re-filter for evalues
-cat "${annotation}"/"${bioproject}"/"${biosample}"_hypoth.blastp | \
-    grep -viF "hypothetical" | \
-    awk '{if($12 < 1e-30) {print}}' | \
-    cut -f 2 | \
-    cut -d "|" -f4 \
-    > "${annotation}"/"${bioproject}"/accession.list
-
-#Download the sequences
-perl "${scripts}"/http_post.pl \
-    "${annotation}"/"${bioproject}"/accession.list \
-    "${annotation}"/"${bioproject}"/extra_hits.fasta
-# esearch -db protein -query "$(cat "${spadesOut}"/annotation/accession.list)" | \
-#     efetch -db protein -format fasta \
-#     > "${spadesOut}"/annotation/extra_hits.fasta
-
-
-#relaunch Prokka annotation with the new positive blast hit fasta file as reference
-prokka  --outdir "${annotation}"/"$bioproject" \
-        --force \
-        --compliant \
-        --prefix "$biosample" \
-        --locustag "$tag" \
-        --centre "$centre" \
-        --kingdom "$kingdom" \
-        --genus "$genus" \
-        --species "$species" \
-        --strain "$strain" \
-        --gram "$gram" \
-        --cpus "$cpu" \
-        --rfam \
-        --proteins "${annotation}"/"${bioproject}"/extra_hits.fasta \
-        "${polished}"/"${sample}"_ordered.fasta
-
-echo -e "Number of hypothetical proteins remaining after the BLAST (1e-30): $(cat "${annotation}"/"${bioproject}"/"${biosample}".faa | grep -ic "hypothetical")" \
-    | tee -a "${logs}"/log.txt
+find "$ordered" -type f -name "*_ordered.fasta" \
+    | parallel  --bar \
+                --env annotate \
+                --env annotation \
+                --env logs \
+                --env qc \
+                --env cpu \
+                --env maxProc \
+                --env kingdom \
+                --env genus \
+                --env species \
+                --env strain \
+                --env tag \
+                --env centre \
+                --env gram \
+                --env bioproject \
+                --env biosample \
+                --jobs "$maxProc" \
+                'annotate {}'
 
 
 #######################
