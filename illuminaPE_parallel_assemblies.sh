@@ -25,7 +25,7 @@ export db="/media/6tb_raid10/db/centrifuge/2017-10-12_bact_vir_h"
 
 #Maximum number of cores used per sample for parallel processing
 #A highier value reduces the memory footprint.
-export maxProc=7
+export maxProc=9
 
 #Annotation
 export kingdom="Bacteria"
@@ -406,7 +406,7 @@ find "$fastq" -type f -name "*.fastq.gz" \
                 --env qc \
                 "pigz -d -c {} > "${kat}"/reads/{/.}"
 
-function runKat()
+function run_kat()
 {
     r1="$1"
     r2=$(sed 's/_R1/_R2/' <<< "$r1")
@@ -462,19 +462,19 @@ function runKat()
 }
 
 #make function available to parallel
-export -f runKat
+export -f run_kat
 
 [ -d "${kat}"/raw ] || mkdir -p "${kat}"/raw
 
 # run samples in parallel
 find "${kat}"/reads -type f -name "*R1*.fastq" \
     | parallel  --bar \
-                --env runKat \
+                --env run_kat \
                 --env cpu \
                 --env kat \
                 --env maxProc \
                 --jobs "$maxProc" \
-                "runKat {} "${kat}"/raw"
+                "run_kat {} "${kat}"/raw"
 
 # Cleanup
 rm -rf "$kat"/reads
@@ -822,6 +822,7 @@ find "${assembly}" -type f -name "*.fasta" \
 
 # Folder to store refseq genomes
 [ -d "${ordered}"/refseq ] || mkdir -p "${ordered}"/refseq
+[ -d "${qc}"/distance ] || mkdir -p "${qc}"/distance
 
 # Download all assemblies from species
 bash "${scripts}"/get_assemblies.sh \
@@ -849,6 +850,9 @@ function order_contigs ()
         acc=$(cut -d "_" -f 1,2 <<< $(basename "$closest"))  # accession number of the closest match
 
         echo ""$sample" closest genome is \""${closest_ID}" ("${closest_acc}")\" with a score of "${score}"/1000" | tee -a "${logs}"/log.txt  #Add information to log
+
+        #move distance files
+        find "${ordered}"/refseq -type f -name "*.distance.tsv" -exec mv {} "${qc}"/distance \;
 
         # uncompress downloaded fasta file for Mauve
         [ -s "${closest%.gz}" ] || pigz -p $((cpu/maxProc)) -d -k "$closest" # decompress if not present
@@ -882,7 +886,6 @@ function order_contigs ()
         # "${prog}"/mauve_snapshot_2015-02-13/./Mauve \
         #     "${qc}"/mauve/"${sample}"_ordered.xmfa &
 
-        rm -rf "${ordered}"/mauve
     else
         circlator fixstart \
             --verbose \
@@ -902,13 +905,11 @@ find "$assembly" -type f -name "*trimmed"${smallest_contig}"*" | \
                 --env scripts \
                 --env ordered \
                 --env memJava \
+                --jobs "$maxProc" \
                 "order_contigs {}"
 
-#move distance files
-[ -d "${qc}"/distance ] || mkdir -p "${qc}"/distance
-find "${ordered}"/refseq -type f -name "*.distance.tsv" -exec mv {} "${qc}"/distance \;
-
 #cleanup
+rm -rf "${ordered}"/mauve
 rm -rf "${ordered}"/refseq
 find "$ordered" -type f -name "*.sslist" -exec rm {} \;
 
