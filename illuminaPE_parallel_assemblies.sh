@@ -1,6 +1,6 @@
 #!/bin/bash
 
-version="0.2.1"
+version="0.2.1.1"
 
 
 ######################
@@ -853,7 +853,7 @@ function order_contigs ()
         echo ""$sample" closest genome is \""${closest_ID}" ("${closest_acc}")\" with a score of "${score}"/1000" | tee -a "${logs}"/log.txt  #Add information to log
 
         #move distance file
-        mv "${ordered}"/refseq/"${sample}".distance.tsv "${qc}"/distance \;
+        mv "${ordered}"/refseq/"${sample}".distance.tsv "${qc}"/distance
 
         # uncompress downloaded fasta file for Mauve
         [ -s "${closest%.gz}" ] || pigz -p $((cpu/maxProc)) -d -k "$closest" # decompress if not present
