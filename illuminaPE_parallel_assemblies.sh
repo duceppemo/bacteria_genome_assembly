@@ -1,6 +1,6 @@
 #!/bin/bash
 
-version="0.2"
+version="0.2.1"
 
 
 ######################
@@ -25,7 +25,7 @@ export db="/media/6tb_raid10/db/centrifuge/2017-10-12_bact_vir_h"
 
 #Maximum number of cores used per sample for parallel processing
 #A highier value reduces the memory footprint.
-export maxProc=9
+export maxProc=8
 
 #Annotation
 export kingdom="Bacteria"
@@ -769,8 +769,9 @@ function assemble ()
         -s "$1" \
         -o "${assembly}"/"$sample" \
         -t $((cpu/maxProc)) \
-        --keep 2 \
+        --keep 3 \
         --no_correct \
+        --verbosity 2 \
         --mode normal \
         --pilon_path "${prog}"/pilon/pilon-dev.jar
 
@@ -805,7 +806,7 @@ function trimAssembly()
 
 export -f trimAssembly
 
-find "${assembly}" -type f -name "*.fasta" \
+find "${assembly}" -type f -maxdepth 2 -name "*.fasta" \
     | parallel  --bar \
                 --env prog \
                 --env smallest_contig \
@@ -851,8 +852,8 @@ function order_contigs ()
 
         echo ""$sample" closest genome is \""${closest_ID}" ("${closest_acc}")\" with a score of "${score}"/1000" | tee -a "${logs}"/log.txt  #Add information to log
 
-        #move distance files
-        find "${ordered}"/refseq -type f -name "*.distance.tsv" -exec mv {} "${qc}"/distance \;
+        #move distance file
+        mv "${ordered}"/refseq/"${sample}".distance.tsv "${qc}"/distance \;
 
         # uncompress downloaded fasta file for Mauve
         [ -s "${closest%.gz}" ] || pigz -p $((cpu/maxProc)) -d -k "$closest" # decompress if not present
@@ -926,14 +927,14 @@ find "$ordered" -type f -name "*.sslist" -exec rm {} \;
 function blast()
 {
     blastn \
-    -db nt \
-    -query "$1" \
-    -out "${qc}"/blast/$(basename "${1%.fasta}").blastn.tsv \
-    -evalue "1e-10" \
-    -outfmt '6 qseqid sseqid stitle pident length mismatch gapopen qstart qend sstart send evalue bitscore' \
-    -num_threads $((cpu/maxProc)) \
-    -max_target_seqs 1 \
-    -max_hsps 1
+        -db nt \
+        -query "$1" \
+        -out "${qc}"/blast/$(basename "${1%.fasta}").blastn.tsv \
+        -evalue "1e-10" \
+        -outfmt '6 qseqid sseqid stitle pident length mismatch gapopen qstart qend sstart send evalue bitscore' \
+        -num_threads $((cpu/maxProc)) \
+        -max_target_seqs 1 \
+        -max_hsps 1
 
     echo -e "qseqid\tsseqid\tstitle\tpident\tlength\tmismatch\tgapopen\tqstart\tqend\tsstart\tsend\tevalue\tbitscore" \
         > "${qc}"/blast/$(basename "${1%.fasta}").blastn.tsv.tmp
@@ -1012,7 +1013,7 @@ function get_coverage()  # unsing unmerged reads only
 {
     sample=$(basename "$1" | cut -d '_' -f 1)
 
-    [ -d "${qc}"/coverage/"$sample" ] || mkdir "${qc}"/coverage/"$sample"
+    [ -d "${qc}"/coverage/"$sample" ] || mkdir -p "${qc}"/coverage/"$sample"
 
     bwa index "$1"
 
