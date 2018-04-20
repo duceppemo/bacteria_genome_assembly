@@ -1,6 +1,6 @@
 #!/bin/bash
 
-version="0.2.1.1"
+version="0.2.1.2"
 
 
 ######################
@@ -1019,30 +1019,19 @@ function get_coverage()  # unsing unmerged reads only
 
     #Align corrected paired-end
     rg_pe="@RG\tID:"${sample}"\tCN:"${centre}"\tLB:NexteraXT\tPL:ILLUMINA\tSM:"${sample}""
+    r1="${corrected}"/"${sample}"/"${sample}"_Cor3_1P.fastq.gz
+    r2="${corrected}"/"${sample}"/"${sample}"_Cor3_2P.fastq.gz
 
-    bwa mem -t $((cpu/maxProc)) -M -R "$rg_pe" \
-        "$1" \
-        "${corrected}"/"${sample}"/"${sample}"_Cor3_1P.fastq.gz \
-        "${corrected}"/"${sample}"/"${sample}"_Cor3_2P.fastq.gz | \
+    bwa mem -t $((cpu/maxProc)) -M -R "$rg_pe" "$1" "$r1" "$r2" | \
     samtools view -@ $((cpu/maxProc)) -b -h -F 4 - | \
-    samtools sort -@ $((cpu/maxProc)) -m 10G -o "${qc}"/coverage/"${sample}"/"${sample}".bam -
+    samtools sort -@ $((cpu/maxProc)) -m 10G - | \
+    samtools rmdup - "${qc}"/coverage/"${sample}"/"${sample}".bam
 
-    samtools rmdup \
-        "${qc}"/coverage/"${sample}"/"${sample}".bam \
-        "${qc}"/coverage/"${sample}"/"${sample}"_nodup.bam
-
-    samtools sort -@ "$cpu" -m 10G \
-        -o "${qc}"/coverage/"${sample}"/"${sample}"_sorted.bam \
-        "${qc}"/coverage/"${sample}"/"${sample}"_nodup.bam
-
-    rm "${qc}"/coverage/"${sample}"/"${sample}".bam
-    rm "${qc}"/coverage/"${sample}"/"${sample}"_nodup.bam
-
-    samtools index "${qc}"/coverage/"${sample}"/"${sample}"_sorted.bam
+    samtools index "${qc}"/coverage/"${sample}"/"${sample}".bam
 
     #Average genome depth of coverage
     average_cov=$(samtools depth \
-        "${qc}"/coverage/"${sample}"/"${sample}"_sorted.bam  \
+        "${qc}"/coverage/"${sample}"/"${sample}".bam  \
         | awk '{sum+=$3} END { print sum/NR}')
 
     printf "%s\t%.*f\n" "$sample" 0 "$average_cov" | tee -a "${qc}"/coverage/average_cov.tsv
@@ -1067,22 +1056,19 @@ find "$ordered" -type f -name "*_ordered.fasta" | \
 #clean bwa index files
 find "$ordered" -type f ! -name "*.fasta" -exec rm {} \;
 
-#Remove bam files
-find "${qc}"/coverage -mindepth 1 -maxdepth 1 -type d -exec rm -rf {} \;
-
 
 ### quast ###
 
 # #Merge all bam files
 # declare -a bams=()
-# for i in $(find "${qc}"/coverage -type f -name "*_sorted.bam"); do 
+# for i in $(find "${qc}"/coverage -type f -name "*.bam"); do 
 #     bams+=("$i")
 # done
 
 # samtools merge -@ "$cpu" - ${bams[@]} | \
 # samtools rmdup - - | \
-# samtools sort -@ "$cpu" -m 10G -o "${qc}"/coverage/all_sorted.bam -
-# samtools index "${qc}"/coverage/all_sorted.bam
+# samtools sort -@ "$cpu" -m 10G -o "${qc}"/coverage/all.bam -
+# samtools index "${qc}"/coverage/all.bam
 #All the genomes compared
 declare -a genomes=()
 for i in $(find "$ordered" -type f -name "*_ordered.fasta"); do 
@@ -1198,37 +1184,10 @@ function run_blobtools ()
 
     [ -d "${blob}"/"$sample" ] || mkdir -p "${blob}"/"$sample"
 
-    # bwa index "$genome"
-
-    # r1=""${corrected}"/"${sample}"/"${sample}"_Cor3_1P.fastq.gz"
-    # r2=$(sed 's/_1P/_2P/' <<< "$r1")
-
-    
-
-    # # map trimmed and corrected reads to assembly
-    # rg_pe="@RG\tID:"${sample}"\tCN:"${centre}"\tLB:NexteraXT\tPL:ILLUMINA\tSM:"${sample}""
-
-    # bwa mem -t $((cpu/maxProc)) -R "$rg_pe" -M "$genome" "$r1" "$r2" | \
-    #     samtools view -@ $((cpu/maxProc)) -b -h -F 4 - | \
-    #     samtools sort -@ $((cpu/maxProc)) -m 10G -o "${blob}"/"${sample}"/"${sample}".bam -
-
-    # samtools rmdup \
-    #     "${blob}"/"${sample}"/"${sample}".bam \
-    #     "${blob}"/"${sample}"/"${sample}"_nodup.bam
-
-    # samtools sort -@ $((cpu/maxProc)) -m 10G \
-    #     -o "${blob}"/"${sample}"/"${sample}".bam \
-    #     "${blob}"/"${sample}"/"${sample}"_nodup.bam
-
-    # rm "${blob}"/"${sample}"/"${sample}".bam
-    # rm "${blob}"/"${sample}"/*nodup.bam*
-
-    # samtools index "${blob}"/"${sample}"/"${sample}".bam
-
     # Make coverage file from bam
     blobtools map2cov \
         -i "$genome" \
-        -b "${qc}"/coverage/"${sample}"/"${sample}"_sorted.bam \
+        -b "${qc}"/coverage/"${sample}"/"${sample}".bam \
         -o "${blob}"/"${sample}"/
 
     #blast assembly on nt
@@ -1245,7 +1204,7 @@ function run_blobtools ()
     # Create BlobDB
     blobtools create \
         -i "$genome" \
-        -c "${qc}"/coverage/"${sample}"/"${sample}"_sorted.bam \
+        -c "${qc}"/coverage/"${sample}"/"${sample}".bam \
         -t "${blob}"/"${sample}"/"${sample}".blast_nt.tsv \
         -o "${blob}"/"${sample}"/"${sample}"
 
@@ -1281,7 +1240,7 @@ function run_blobtools ()
     # Generate covplot with colour by %GC categories
     blobtools covplot \
         -i "${blob}"/"${sample}"/"${sample}".blobDB.json \
-        -c "${qc}"/coverage/"${sample}"/"${sample}"_sorted.bam \
+        -c "${qc}"/coverage/"${sample}"/"${sample}".bam \
         --catcolour "${blob}"/"${sample}"/"${sample}".blobDB.id.gc.catcolour.txt \
         -o "${blob}"/"${sample}"/
 
@@ -1308,6 +1267,9 @@ find "$ordered" -type f -name "*_ordered.fasta" \
                 --env centre \
                 --jobs "$maxProc" \
                 'run_blobtools {}'
+
+# Remove bam files
+find "${qc}"/coverage -mindepth 1 -maxdepth 1 -type d -exec rm -rf {} \;
 
 # Deactivate the virtual environment
 deactivate
