@@ -1,6 +1,6 @@
 #!/bin/bash
 
-version="0.2.1.2"
+version="0.2.2"
 
 
 ######################
@@ -76,6 +76,7 @@ export assembly=""${baseDir}"/assembly"
 export ordered=""${baseDir}"/ordered"
 export annotation=""${baseDir}"/annotation"
 export phaster=""${baseDir}"/phaster"
+export amr=""${baseDir}"/amr"
 
 #create folders if do not exist
 # "||" if test is false
@@ -95,6 +96,7 @@ export phaster=""${baseDir}"/phaster"
 [ -d "$ordered" ] || mkdir -p "$ordered"
 [ -d "$annotation" ] || mkdir -p "$annotation"
 [ -d "$phaster" ] || mkdir -p "$phaster"
+[ -d "$amr" ] || mkdir -p "$amr"
 
 
 ######################
@@ -274,6 +276,19 @@ else
     echo >&2 "R was not found. Aborting." | tee -a "${logs}"/log.txt
     exit 1
 fi
+
+# ResFinder
+perl "${prog}"/resfinder/resfinder.pl -h
+if [ $# -eq 0 ]; then
+    version=$(perl "${prog}"/resfinder/resfinder.pl -h | grep "Current" | cut -d ":" -f 2 | tr -d " ")
+    echo "resfinder v"${version}"" | tee -a "${logs}"/log.txt
+else
+    echo >&2 "resfinder was not found. Aborting." | tee -a "${logs}"/log.txt
+    #exit 1
+fi
+
+# Phaster
+
 
 #add space after prog version
 echo -e "\n" | tee -a "${logs}"/log.txt
@@ -946,7 +961,7 @@ export -f blast
 
 [ -d "${qc}"/blast ] || mkdir -p "${qc}"/blast
 
-find "${ordered}" -type f -name "*_ordered.fasta" \
+find "$ordered" -type f -name "*trimmed"${smallest_contig}"_ordered.fasta" \
     | parallel  --bar \
                 --env blast \
                 --env cpu \
@@ -1042,7 +1057,7 @@ export -f get_coverage
 [ -d "${qc}"/coverage ] || mkdir -p "${qc}"/coverage
 echo -e "Sample\tAverage_Cov" > "${qc}"/coverage/average_cov.tsv
 
-find "$ordered" -type f -name "*_ordered.fasta" | \
+find "$ordered" -type f -name "*trimmed"${smallest_contig}"_ordered.fasta" | \
     parallel    --bar \
                 --env get_coverage \
                 --env cpu \
@@ -1071,7 +1086,7 @@ find "$ordered" -type f ! -name "*.fasta" -exec rm {} \;
 # samtools index "${qc}"/coverage/all.bam
 #All the genomes compared
 declare -a genomes=()
-for i in $(find "$ordered" -type f -name "*_ordered.fasta"); do 
+for i in $(find "$ordered" -type f -name "*trimmed"${smallest_contig}"_ordered.fasta"); do 
     genomes+=("$i")
 done
 
@@ -1096,7 +1111,7 @@ function run_quast()
 export -f run_quast  # -f is to export functions
 
 #run paired-end merging on multiple samples in parallel
-find "$ordered" -type f -name "*_ordered.fasta" \
+find "$ordered" -type f -name "*trimmed"${smallest_contig}"_ordered.fasta" \
     | parallel  --bar \
                 --env run_quast \
                 --env maxProc \
@@ -1157,7 +1172,7 @@ function katAssembly ()
 
 export -f katAssembly
 
-find "${ordered}"/ -type f -name "*_ordered.fasta" \
+find "$ordered" -type f -name "*trimmed"${smallest_contig}"_ordered.fasta" \
     | parallel  --bar \
                 --env katAssembly \
                 --env cpu \
@@ -1256,7 +1271,7 @@ function run_blobtools ()
 
 export -f run_blobtools
 
-find "$ordered" -type f -name "*_ordered.fasta" \
+find "$ordered" -type f -name "*trimmed"${smallest_contig}"_ordered.fasta" \
     | parallel  --bar \
                 --env run_blobtools \
                 --env cpu \
@@ -1373,7 +1388,7 @@ function annotate()
 
 export -f annotate
 
-find "$ordered" -type f -name "*_ordered.fasta" | \
+find "$ordered" -type f -name "*trimmed"${smallest_contig}"_ordered.fasta" | \
     parallel    --bar \
                 --env annotate \
                 --env annotation \
@@ -1388,3 +1403,95 @@ find "$ordered" -type f -name "*_ordered.fasta" | \
                 --env scripts \
                 --jobs "$maxProc" \
                 "annotate {}"
+
+
+### Resfinder
+
+function run_resfinder ()
+{
+    sample=$(cut -d "_" -f 1 <<< $(basename "$1"))
+
+    [ -d "${amr}"/"${sample}"/"$db" ] || mkdir -p "${amr}"/"${sample}"/"$db"
+
+    perl "${prog}"/resfinder/resfinder.pl \
+        -d "${prog}"/resfinder/resfinder_db/ \
+        -a "$db" \
+        -i "$1" \
+        -o "${amr}"/"$sample"/"$db" \
+        -k 90 \
+        -l 60
+}
+
+export -f run_resfinder
+
+for h in $(find "${prog}"/resfinder/resfinder_db -type f -name "*.fsa"); do
+    export db=$(sed 's/\.fsa//' <<< $(basename "$h"))
+
+    find "$ordered" -type f -name "*trimmed"${smallest_contig}"_ordered.fasta" | \
+        parallel --env run_resfinder \
+            --env db \
+            "run_resfinder {}"
+done
+
+#Check if any hit
+find "${amr}" -type f -name "results_tab.txt" \
+    -exec cat {} \; | sed -n '1d' | tee "${amr}"/resfinder_hits.txt
+
+
+### Phaster
+
+#trim assemblies
+function phaster_trim()
+{
+    sample=$(cut -d '_' -f 1 <<< $(basename "$1"))
+
+    # http://phaster.ca/instructions
+    if [ $(cat "$1" | grep -Ec "^>") -gt 1 ]; then  # if more than one contig
+        #remove contigs smaller than 2000 bp from assembly
+        perl "${prog}"/phage_typing/removesmallscontigs.pl \
+            2000 \
+            "$1" \
+            > "${phaster}"/assemblies/"${sample}"_trimmed2000.fasta
+    elif [ $(cat "$1" | grep -Ec "^>") -eq 1 ]; then  # if only one contig
+        #remove contigs smaller than 2000 bp from assembly
+        perl "${prog}"/phage_typing/removesmallscontigs.pl \
+            1500 \
+            "$1" \
+            > "${phaster}"/assemblies/"${sample}"_trimmed1500.fasta
+    else
+        echo "No assembly for "$sample""  # Should not get here!
+        exit 1
+    fi
+}
+
+#make function available to parallel
+export -f phaster_trim  # -f is to export functions
+
+ # To store trimmed assemblies for phaster submission
+[ -d "${phaster}"/assemblies ] || mkdir -p "${phaster}"/assemblies 
+
+#run trimming on multiple assemblies in parallel
+find "$ordered" -type f -name "*trimmed"${smallest_contig}"_ordered.fasta" \
+    | parallel  --bar \
+                --env phaster_trim \
+                --env prog \
+                'phaster_trim {}'
+
+function phasterSubmit ()
+{
+    sample=$(basename "$1" | cut -d '_' -f 1)
+
+    # {"job_id":"ZZ_7aed0446a6","status":"You're next!..."}
+    wget --post-file="$i" \
+        http://phaster.ca/phaster_api?contigs=1 \
+        -O "${phaster}"/"${sample}".json \
+        -o "${phaster}"/"${sample}"_wget.log
+}
+
+# Submit to phaster sequencially
+for i in $(find "${phaster}"/assemblies -type f -name "*.fasta"); do
+    phasterSubmit "$i"
+done
+
+python3 ~/scripts/checkPhasterServer.py -f "$phaster"
+
