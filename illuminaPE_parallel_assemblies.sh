@@ -1,6 +1,6 @@
 #!/bin/bash
 
-version="0.2.2"
+version="0.2.1.2"
 
 
 ######################
@@ -258,7 +258,7 @@ else
 fi
 
 # Jellyfish
-if hash 2>/dev/null; then
+if hash jellyfish 2>/dev/null; then
     jellyfish --version | tee -a "${logs}"/log.txt
 else
     echo >&2 "jellyfish was not found. Aborting." | tee -a "${logs}"/log.txt
@@ -1219,7 +1219,7 @@ function run_blobtools ()
     # Create BlobDB
     blobtools create \
         -i "$genome" \
-        -c "${qc}"/coverage/"${sample}"/"${sample}".bam \
+        -c "${blob}"/"${sample}"/"${sample}".bam.cov \
         -t "${blob}"/"${sample}"/"${sample}".blast_nt.tsv \
         -o "${blob}"/"${sample}"/"${sample}"
 
@@ -1255,7 +1255,7 @@ function run_blobtools ()
     # Generate covplot with colour by %GC categories
     blobtools covplot \
         -i "${blob}"/"${sample}"/"${sample}".blobDB.json \
-        -c "${qc}"/coverage/"${sample}"/"${sample}".bam \
+        -c "${blob}"/"${sample}"/"${sample}".bam.cov \
         --catcolour "${blob}"/"${sample}"/"${sample}".blobDB.id.gc.catcolour.txt \
         -o "${blob}"/"${sample}"/
 
@@ -1494,4 +1494,3 @@ for i in $(find "${phaster}"/assemblies -type f -name "*.fasta"); do
 done
 
 python3 ~/scripts/checkPhasterServer.py -f "$phaster"
-
