@@ -1,6 +1,6 @@
 # Description
 
-This pipeline uses gzipped paired-end fastq files as input. Sample names are taken from everything that is before the first underscore in the file name. So filenames must have an underscore for the pipeline to work as is. Also, there are a few hard coded paths in the first section of the script (User Defined). These paths must be updated to fit your installation.
+*illuminaPE_parallel_assemblies.sh* uses gzipped paired-end fastq files as input. Sample names are taken from everything that is before the first underscore in the file name. So filenames must have an underscore for the pipeline to work as is. Also, there are a few hard coded paths in the first section of the script (User Defined). These paths must be updated to fit your installation.
 
 # Dependencies
 
