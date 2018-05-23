@@ -1,6 +1,6 @@
 #!/bin/bash
 
-version="0.2.1.2"
+version="0.2.2"
 
 
 ######################
@@ -412,15 +412,6 @@ done
 
 ### KAT ###
 
-# temp folder
-[ -d "${kat}"/reads ] || mkdir -p "${kat}"/reads
-
-# KAT can't take compressed files as input
-find "$fastq" -type f -name "*.fastq.gz" \
-    | parallel  --bar \
-                --env qc \
-                "pigz -d -c {} > "${kat}"/reads/{/.}"
-
 function run_kat()
 {
     r1="$1"
@@ -437,7 +428,7 @@ function run_kat()
     kat plot density \
         -o "${2}"/"${sample}"/"$sample"_gcp.mx.png \
         --y_label "GC count" \
-        --x_label "K-mer multiplicity (R1 and R2 combines)" \
+        --x_label "K-mer multiplicity (R1 and R2 combined)" \
         --z_label "Distinct K-mers per bin" \
         "${2}"/"${sample}"/"$sample"_gcp.mx
 
@@ -481,8 +472,9 @@ export -f run_kat
 
 [ -d "${kat}"/raw ] || mkdir -p "${kat}"/raw
 
+source activate kat
 # run samples in parallel
-find "${kat}"/reads -type f -name "*R1*.fastq" \
+find "$fastq" -type f -name "*R1*.fastq.gz" \
     | parallel  --bar \
                 --env run_kat \
                 --env cpu \
@@ -491,8 +483,9 @@ find "${kat}"/reads -type f -name "*R1*.fastq" \
                 --jobs "$maxProc" \
                 "run_kat {} "${kat}"/raw"
 
+source deactivate
+
 # Cleanup
-rm -rf "$kat"/reads
 find "$kat" -type f \
     | grep -vE ".png|.stats" \
     | xargs rm -r
@@ -675,6 +668,30 @@ function preprocess_reads ()
         2> >(tee "${logs}"/correction_step1/"${sample}".txt)
 
     rm "${trimmed}"/"${sample}"/"${sample}"_Cleaned_?P.fastq.gz
+
+    # Create folder to store insert size results
+    [ -d "${qc}"/insert_size/"${sample}" ] || mkdir -p "${qc}"/insert_size/"${sample}"
+
+    # Insert size
+    cat "${logs}"/correction_step1/ihist_corr_merge.txt \
+        | grep -vE "^#" \
+        > "${qc}"/insert_size/"${sample}"/"${sample}"_insert_bbtools.tsv
+
+    # Plot
+    gnuplot -e "reset; \
+        set term png; \
+        set output '"${qc}"/insert_size/"${sample}"/"${sample}"_insert_bbtools.png'; \
+        set xlabel 'Insert Size (bp)'; \
+        set ylabel 'Read Count'; \
+        set title 'Paired-end reads insert size distribution (BBmerge)'; \
+        stats '"${qc}"/insert_size/"${sample}"/"${sample}"_insert_bbtools.tsv' u 1:2 nooutput; \
+        set xrange [STATS_min_x:STATS_max_x]; \
+        set yrange [STATS_min_y:STATS_max_y]; \
+        set key inside top left; \
+        plot '"${qc}"/insert_size/"${sample}"/"${sample}"_insert_bbtools.tsv' using 1:2 title \""$sample"\" with linespoints; \
+        set output"
+
+    rm "${qc}"/insert_size/"${sample}"/"${sample}"_insert_bbtools.tsv
 
     #Phase2
     clumpify.sh "$memJava" \
@@ -1093,6 +1110,8 @@ done
 quast.py \
     --output-dir "${qc}"/quast/all \
     --threads "$cpu" \
+    --min-contig "$smallest_contig" \
+    --est-ref-size "$size" \
     ${genomes[@]}
 
 # Make quast report on individual assembly
@@ -1104,6 +1123,8 @@ function run_quast()
         -m "$smallest_contig" \
         -t $((cpu/maxProc)) \
         -o "${qc}"/quast/"$sample" \
+        --min-contig "$smallest_contig" \
+        --est-ref-size "$size" \
         $1  # don't put in quotes
 }
 
@@ -1127,23 +1148,7 @@ find "$ordered" -type f -name "*trimmed"${smallest_contig}"_ordered.fasta" \
 # Create output folder
 [ -d "${kat}"/assembly ] || mkdir -p "${kat}"/assembly
 
-function uncompressReads ()
-{
-    name=$(basename "${1%.*}")  #remove ".gz" from the name
-    sample=$(cut -d "_" -f 1 <<< $(basename "$1"))
-    [ -d "${kat}"/assembly/"$sample" ] || mkdir -p "${kat}"/assembly/"$sample"
-    pigz -p $((cpu/maxProc)) -d -c "$1" > "${kat}"/assembly/"${sample}"/"$name"
-}
-
-export -f uncompressReads
-
-find "$corrected" -type f -name "*Cor3*" \
-    | parallel  --bar \
-                --env kat \
-                --env cpu \
-                --env maxProc \
-                --jobs "$maxProc" \
-                "uncompressReads {}"
+# unzipping the file is no longer required in Kat v2.4.1 
 
 # genome assembly analysis
 # both paired-end compared as one group
@@ -1152,25 +1157,66 @@ function katAssembly ()
     sample=$(basename "$1" | cut -d "_" -f 1)
 
     kat comp \
-    -t $((cpu/maxProc)) \
-    -o "${kat}"/assembly/"${sample}"/"${sample}"_pe_vs_asm \
-    ""${kat}"/assembly/"${sample}"/"${sample}"_Cor3_?P.fastq" \
-    "$1"
+        -t $((cpu/maxProc)) \
+        -o "${kat}"/assembly/"${sample}"/"${sample}"_pe_vs_asm \
+        ""${corrected}"/"${sample}"/"${sample}"_Cor3_?P.fastq.gz" \
+        "$1"
 
-    # Rename axes
+    # Redo the plot to rename the axes
     kat plot spectra-cn \
         -o "${kat}"/assembly/"${sample}"/"${sample}"_pe_vs_asm-main.mx.spectra-cn.png \
         --y_label "Number of distinct K-mers" \
         --x_label "K-mer multiplicity" \
         "${kat}"/assembly/"${sample}"/"${sample}"_pe_vs_asm-main.mx
 
-    kat_distanalysis.py \
+    # kat plot spectra-mx \
+    #     -o "${kat}"/assembly/"${sample}"/"${sample}"_spectra-mx.png \
+    #     --y_label "# Distinct Kmers" \
+    #     --x_label "Kmer Frequency" \
+    #     --list c1,r1 \
+    #     "${kat}"/assembly/"${sample}"/"${sample}"_pe_vs_asm-main.mx
+
+    kat sect  \
+        -t $((cpu/maxProc)) \
+        -o "${kat}"/assembly/"${sample}"/"${sample}"_gpc \
+        "$1" \
+        "${corrected}"/"${sample}"/"${sample}"_Cor3_1P.fastq.gz \
+        "${corrected}"/"${sample}"/"${sample}"_Cor3_2P.fastq.gz
+
+    # Plot coverage for individual contigs
+    contigs=($(cat "$1" | grep -F ">" | cut -d " " -f 1 | tr -d ">" | tr "\n" " "))
+    # echo "${contigs[@]}"
+
+    [ -d "${kat}"/assembly/"${sample}"/coverage_plots ] || mkdir -p "${kat}"/assembly/"${sample}"/coverage_plots
+
+    for i in "${contigs[@]}"; do
+        kat plot profile \
+            -o "${kat}"/assembly/"${sample}"/coverage_plots/"${sample}"_"${i}".png \
+            --y_label "Coverage" \
+            --x_label "Size (bp)" \
+            --title "Coverage of contig "${i}"" \
+            --index "$i" \
+            "${kat}"/assembly/"${sample}"/"${sample}"_gpc-counts.cvg
+    done
+
+    kat cold \
+        -t $((cpu/maxProc)) \
+        -o "${kat}"/assembly/"${sample}"/"${sample}"_cold \
+        "$1" \
+        "${corrected}"/"${sample}"/"${sample}"_Cor3_1P.fastq.gz \
+        "${corrected}"/"${sample}"/"${sample}"_Cor3_2P.fastq.gz
+
+    python3 "${CONDA_PREFIX}"/lib/python3.6/local/kat/distanalysis.py \
         -o "${kat}"/assembly/"${sample}"/"${sample}" \
         "${kat}"/assembly/"${sample}"/"${sample}"_pe_vs_asm-main.mx \
+        -p \
+        -z \
         | tee "${kat}"/assembly/"${sample}"/"${sample}"_decompostion_analysis.stats
 }
 
 export -f katAssembly
+
+source activat kat
 
 find "$ordered" -type f -name "*trimmed"${smallest_contig}"_ordered.fasta" \
     | parallel  --bar \
@@ -1180,6 +1226,8 @@ find "$ordered" -type f -name "*trimmed"${smallest_contig}"_ordered.fasta" \
                 --env kat \
                 --jobs "$maxProc" \
                 'katAssembly {}'
+
+source deactivate
 
 # Cleanup
 find "${kat}"/assembly -type f \
