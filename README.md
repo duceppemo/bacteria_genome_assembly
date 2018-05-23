@@ -18,7 +18,7 @@ Software:
 - Mash (http://mash.readthedocs.io/en/latest/)
 - Mauve (http://darlinglab.org/mauve/mauve.html)
 - BLAST (https://blast.ncbi.nlm.nih.gov/Blast.cgi_
-- KAT (http://kat.readthedocs.io/en/latest/)
+- KAT 2.4+ (http://kat.readthedocs.io/en/latest/)
 - GenomeScope (https://github.com/schatzlab/genomescope)
 - Conda (https://conda.io/miniconda.html)
 - Blobtools (https://blobtools.readme.io/docs)
