@@ -5,29 +5,27 @@
 # Dependencies
 
 Software:
-- Centrifuge
+- Centrifuge (https://ccb.jhu.edu/software/centrifuge/manual.shtml)
 - Java
-- FastQC
-- BBTools
-- SPAdes assembler
-- BWA-mem
-- Samtools
-- Pilon
-- QUAST
-- CD-HIT-EST
-- Prokka
-- Mash
-- Mauve
-- BLAST
-- KAT
-- Jellyfish
-- GenomeScope
-- Conda
-- Blobtools
-- ResFinder
-- Unicycler
+- FastQC (https://www.bioinformatics.babraham.ac.uk/projects/fastqc/)
+- BBTools (https://jgi.doe.gov/data-and-tools/bbtools/)
+- SPAdes assembler (cab.spbu.ru/software/spades/)
+- BWA-mem (http://bio-bwa.sourceforge.net/)
+- SAMtools/BCFtools/HTSlib (http://www.htslib.org/download/)
+- Pilon (https://github.com/broadinstitute/pilon/wiki)
+- QUAST (http://quast.sourceforge.net/quast)
+- Prokka (https://github.com/tseemann/prokka)
+- Mash (http://mash.readthedocs.io/en/latest/)
+- Mauve (http://darlinglab.org/mauve/mauve.html)
+- BLAST (https://blast.ncbi.nlm.nih.gov/Blast.cgi_
+- KAT (http://kat.readthedocs.io/en/latest/)
+- GenomeScope (https://github.com/schatzlab/genomescope)
+- Conda (https://conda.io/miniconda.html)
+- Blobtools (https://blobtools.readme.io/docs)
+- ResFinder (https://bitbucket.org/genomicepidemiology/resfinder)
+- Unicycler (https://github.com/rrwick/Unicycler)
 
-Note that some of these tools also have dependencies that are not covered here. An active internet connection is also required.
+Note that some of these tools also have dependencies that are not covered here. An active internet connection is also required. Many of these tools can now be installed through Conda too. For such tool, I prefer to create a virtual environment. In this pipeline, blobtools and KAT are installed this way.
 
 Scripts:
 - removesmallscontigs.pl
