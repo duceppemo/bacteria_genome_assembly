@@ -1,6 +1,6 @@
 #!/bin/bash
 
-version="0.2.2"
+version="0.2.2.1"
 
 
 ######################
@@ -25,7 +25,7 @@ export db="/media/6tb_raid10/db/centrifuge/2017-10-12_bact_vir_h"
 
 #Maximum number of cores used per sample for parallel processing
 #A highier value reduces the memory footprint.
-export maxProc=8
+export maxProc=4
 
 #Annotation
 export kingdom="Bacteria"
@@ -809,6 +809,8 @@ function assemble ()
 
     cp "${assembly}"/"${sample}"/assembly.fasta \
         "${assembly}"/"${sample}"/"${sample}".fasta
+
+    find "${assembly}"/"${sample}"/pilon_polish ! -name "*.out" ! -name "*.changes" -exec rm {} \;
 }
 
 export -f assemble
@@ -887,38 +889,45 @@ function order_contigs ()
         #move distance file
         mv "${ordered}"/refseq/"${sample}".distance.tsv "${qc}"/distance
 
-        # uncompress downloaded fasta file for Mauve
-        [ -s "${closest%.gz}" ] || pigz -p $((cpu/maxProc)) -d -k "$closest" # decompress if not present
+        # only order contigs if closest genome is at least 80% similar
+        if [ "$score" -ge 800 ]; then
+            # uncompress downloaded fasta file for Mauve
+            [ -s "${closest%.gz}" ] || pigz -p $((cpu/maxProc)) -d -k "$closest" # decompress if not present
 
-        # Use Mauve in batch mode to order contigs with closest genome
-        java "$memJava" -cp "${prog}"/mauve_snapshot_2015-02-13/Mauve.jar \
-            org.gel.mauve.contigs.ContigOrderer \
-            -output "${ordered}"/mauve/"$sample" \
-            -ref "${closest%.gz}" \
-            -draft "$1"
+            # Use Mauve in batch mode to order contigs with closest genome
+            java "$memJava" -cp "${prog}"/mauve_snapshot_2015-02-13/Mauve.jar \
+                org.gel.mauve.contigs.ContigOrderer \
+                -output "${ordered}"/mauve/"$sample" \
+                -ref "${closest%.gz}" \
+                -draft "$1"
 
-        #fix formating of Mauve output
-        #find out how many "alignment" folder there is
-        n=$(find "${ordered}"/mauve/"$sample" -maxdepth 1 -type d | sed '1d' | wc -l)
+            #fix formating of Mauve output
+            #find out how many "alignment" folder there is
+            n=$(find "${ordered}"/mauve/"$sample" -maxdepth 1 -type d | sed '1d' | wc -l)
 
-        # reformat with no sorting
-        perl "${scripts}"/formatFasta.pl \
-            -i "${ordered}"/mauve/"${sample}"/alignment"${n}"/"$(basename "$1")" \
-            -o "${ordered}"/"${sample}"_ordered.fasta \
-            -w 80
+            # reformat with no sorting
+            perl "${scripts}"/formatFasta.pl \
+                -i "${ordered}"/mauve/"${sample}"/alignment"${n}"/"$(basename "$1")" \
+                -o "${ordered}"/"${sample}"_ordered.fasta \
+                -w 80
 
-        #align with progessiveMauve
-        [ -d "${qc}"/mauve/"${sample}" ] || mkdir -p "${qc}"/mauve/"${sample}"
+            #align with progessiveMauve
+            [ -d "${qc}"/mauve/"${sample}" ] || mkdir -p "${qc}"/mauve/"${sample}"
 
-        "${prog}"/mauve_snapshot_2015-02-13/linux-x64/./progressiveMauve \
-            --output="${qc}"/mauve/"${sample}"/"${sample}"_ordered.xmfa \
-            "${closest%.gz}" \
-            "${ordered}"/"${sample}"_ordered.fasta
+            "${prog}"/mauve_snapshot_2015-02-13/linux-x64/./progressiveMauve \
+                --output="${qc}"/mauve/"${sample}"/"${sample}"_ordered.xmfa \
+                "${closest%.gz}" \
+                "${ordered}"/"${sample}"_ordered.fasta
 
-        # View alignemnt with mauve
-        # "${prog}"/mauve_snapshot_2015-02-13/./Mauve \
-        #     "${qc}"/mauve/"${sample}"_ordered.xmfa &
-
+            # View alignemnt with mauve
+            # "${prog}"/mauve_snapshot_2015-02-13/./Mauve \
+            #     "${qc}"/mauve/"${sample}"_ordered.xmfa &
+         else
+            perl "${scripts}"/formatFasta.pl \
+                -i "$1" \
+                -o "${ordered}"/"${sample}"_ordered.fasta \
+                -w 80
+        fi
     else
         circlator fixstart \
             --verbose \
@@ -1209,14 +1218,15 @@ function katAssembly ()
     python3 "${CONDA_PREFIX}"/lib/python3.6/local/kat/distanalysis.py \
         -o "${kat}"/assembly/"${sample}"/"${sample}" \
         "${kat}"/assembly/"${sample}"/"${sample}"_pe_vs_asm-main.mx \
-        -p \
-        -z \
+        --plot \
+        --format 'png' \
+        --verbose \
         | tee "${kat}"/assembly/"${sample}"/"${sample}"_decompostion_analysis.stats
 }
 
 export -f katAssembly
 
-source activat kat
+source activate kat
 
 find "$ordered" -type f -name "*trimmed"${smallest_contig}"_ordered.fasta" \
     | parallel  --bar \
@@ -1254,6 +1264,7 @@ function run_blobtools ()
         -o "${blob}"/"${sample}"/
 
     #blast assembly on nt
+    # TODO -> modify previous blast so it can be reused here
     blastn \
         -task megablast \
         -query "$genome" \
@@ -1542,3 +1553,6 @@ for i in $(find "${phaster}"/assemblies -type f -name "*.fasta"); do
 done
 
 python3 ~/scripts/checkPhasterServer.py -f "$phaster"
+
+
+#TODO -> wrap all relevant information in a nice PDF report
