@@ -106,21 +106,22 @@ class CheckPhasterServer(object):
         completed_samples = [k for k, item in self.jobs_dict.items() if item['rank'] == 0]
         # No need to retrieve that ones we already have
         completed_samples_to_get = [s for s in completed_samples
-                                    if not os.path.exists(self.folder + '/' + s + '.zip')]
+                                    if not os.path.exists(self.folder + '/' + s + '_phaster.zip')]
 
         # Go ahead and download whatever is completed if don't have it already
         if completed_samples_to_get:
+            print("%d new samples ready to download" % len(completed_samples_to_get))
             for sample in completed_samples_to_get:
                 url = 'http://' + self.jobs_dict[sample]['zip_url']
                 print("Downloading Phaster results for %s" % sample)
                 print(url)
-                self.download_file(url, self.folder, sample + '_phaster.zip')  # TODO -> Do in a separate thread
-        else:  # Wait
+                # self.download_file(url, self.folder, sample + '_phaster.zip')  # TODO -> Do in a separate thread
+        if max_rank > 0:  # Wait
             wait_time = max_rank * 3
-            print("There are %d submission(s) ahead your fist one." + "\n" +
-                  "There are %d submission(s) ahead your last one." + "\n" +
-                  "Waiting %d minutes (based on your last submission) before trying to download again..."
-                  % (min_rank, max_rank, wait_time))
+            print("%d samples still waiting for processing" % len(rank_list) - len(completed_samples_to_get))
+            print("There are %d submission(s) ahead your first one." % min_rank)
+            print("There are %d submission(s) ahead your last one" % max_rank)
+            print("Waiting %d minutes (based on your last submission) before trying to download again..." % wait_time)
             time.sleep(wait_time * 60)
             self.update_json()
             self.get_ranks()
@@ -152,6 +153,7 @@ class CheckPhasterServer(object):
 
         time.sleep(1)  # Phaster server seems to be happier by waiting a bit between requests
 
+
 if __name__ == '__main__':
 
     from argparse import ArgumentParser
@@ -166,5 +168,3 @@ if __name__ == '__main__':
     arguments = parser.parse_args()
 
     CheckPhasterServer(arguments)
-
-
