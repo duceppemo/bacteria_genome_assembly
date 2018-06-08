@@ -1,6 +1,6 @@
 #!/bin/bash
 
-version="0.2.2.1"
+version="0.2.3"
 
 
 ######################
@@ -21,11 +21,14 @@ export prog=""${HOME}"/prog"
 export scripts=""${HOME}"/scripts"
 
 # Centrifuge DB to use
-export db="/media/6tb_raid10/db/centrifuge/2017-10-12_bact_vir_h"
+export centrifuge_db="/media/6tb_raid10/db/centrifuge/2017-10-12_bact_vir_h"
+
+#Kraken DB to use
+export kraken_db="/media/6tb_raid10/db/kraken/refseq_BV_old"
 
 #Maximum number of cores used per sample for parallel processing
 #A highier value reduces the memory footprint.
-export maxProc=4
+export maxProc=8
 
 #Annotation
 export kingdom="Bacteria"
@@ -130,8 +133,8 @@ else
 fi
 
 # Centrifuge database
-if [ -s "${db}".1.cf ]; then
-    echo "Centrifuge database: "$(basename "$db")"" | tee -a "${logs}"/log.txt
+if [ -s "${centrifuge_db}".1.cf ]; then
+    echo "Centrifuge database: "$(basename "$centrifuge_db")"" | tee -a "${logs}"/log.txt
 else
     echo "Could no find the provided Centrifude database. Aborting." | tee -a "${logs}"/log.txt
     exit 1
@@ -287,7 +290,16 @@ else
     #exit 1
 fi
 
-# Phaster
+# PHASTER
+# Online phaster.ca
+
+# Kraken
+if hash kraken 2>/dev/null; then
+    kraken --version | grep -F "version" | tee -a "${logs}"/log.txt
+else
+    echo >&2 "kraken was not found. Aborting." | tee -a "${logs}"/log.txt
+    exit 1
+fi
 
 
 #add space after prog version
@@ -379,6 +391,13 @@ multiqc \
     "${qc}"/fastqc/raw
 
 
+### Read taxonomic assignement ###
+
+# Run Centrifuge is only one sample?
+# Run Centrifuge is want to use nt database (about 40min per sample)
+# Run Kraken if multiple samples and small database (e.g. Bacteria+viruses)
+
+
 ### Centrifuge ###
 
 function run_centrifuge()
@@ -394,7 +413,7 @@ function run_centrifuge()
         -p "$cpu" \
         -t \
         --seed "$RANDOM" \
-        -x "$db" \
+        -x "$centrifuge_db" \
         -1 "$r1" \
         -2 "$r2" \
         --report-file "${2}"/"${sample}"/"${sample}"_report.tsv \
@@ -409,6 +428,48 @@ for i in $(find "$fastq" -type f -name "*_R1*fastq.gz"); do
     run_centrifuge "$i" "${qc}"/centrifuge/raw
 done
 
+
+### Kraken ###
+
+function run_kraken ()
+{
+    r1="$1"
+    r2=$(sed 's/_R1/_R2/' <<< "$r1")
+    sample=$(cut -d "_" -f 1 <<< $(basename "$r1"))
+
+    # Create folder to store report
+    [ -d "${2}"/"${sample}" ] || mkdir -p "${2}"/"${sample}"
+
+    #run Kraken
+    kraken \
+        --db "$kraken_db" \
+        --output "${2}"/"${sample}"/"${sample}".kraken \
+        --threads "$cpu" \
+        --gzip-compressed \
+        --check-names \
+        --fastq-input \
+        --paired "$r1" "$r2" \
+        &> >(tee "${2}"/"${sample}"/"${sample}".kraken.log)
+
+    #Create Kraken report
+    kraken-report \
+        --db "$kraken_db" \
+        "${2}"/"${sample}"/"${sample}".kraken \
+        > "${2}"/"${sample}"/"${sample}".report.tsv
+
+    #Prepare result for display with Krona
+    cat "${2}"/"${sample}"/"${sample}".kraken | \
+        cut -f 2-3 | \
+        ktImportTaxonomy /dev/stdin -o "${2}"/"${sample}"/"${sample}".html
+
+}
+
+# Put database into memory (cheat)
+cat "${kraken_db}"/database.kdb > /dev/null  # About 6min to run
+
+for i in $(find "$fastq" -type f -name "*_R1*fastq.gz"); do
+    run_kraken "$i" "${qc}"/kraken/raw
+done
 
 ### KAT ###
 
@@ -664,7 +725,7 @@ function preprocess_reads ()
         ordered=t \
         threads=$((cpu/maxProc)) \
         ziplevel=9 \
-        ordered ihist="${logs}"/correction_step1/ihist_corr_merge.txt \
+        ordered ihist="${logs}"/correction_step1/"${sample}"_ihist_corr_merge.txt \
         2> >(tee "${logs}"/correction_step1/"${sample}".txt)
 
     rm "${trimmed}"/"${sample}"/"${sample}"_Cleaned_?P.fastq.gz
@@ -737,7 +798,7 @@ function preprocess_reads ()
         ordered=t \
         threads=$((cpu/maxProc)) \
         ziplevel=9 \
-        ihist="${logs}"/merging/ihist_merge.txt \
+        ihist="${logs}"/merging/"${sample}"_ihist_merge.txt \
         2> >(tee "${logs}"/merging/"${sample}".txt)
 
     # rm "${corrected}"/"${sample}"/"${sample}"_Cor3_?P.fastq.gz
@@ -810,7 +871,7 @@ function assemble ()
     cp "${assembly}"/"${sample}"/assembly.fasta \
         "${assembly}"/"${sample}"/"${sample}".fasta
 
-    find "${assembly}"/"${sample}"/pilon_polish ! -name "*.out" ! -name "*.changes" -exec rm {} \;
+    find "${assembly}"/"${sample}"/pilon_polish ! -name "*.out" ! -name "*.changes" -exec rm -rf {} \;
 }
 
 export -f assemble
@@ -965,22 +1026,46 @@ find "$ordered" -type f -name "*.sslist" -exec rm {} \;
 
 ### blast ###
 
+#TODO -> Make output reusable by blobtools
+# keep more output
+# create a filtered version to replicate current with only best hit per contig
+
 function blast()
 {
+    sample=$(cut -d "_" -f 1 <<< $(basename "${1%.fasta}"))
+
+    # blobtools has the following requirements for the blast output
+        # 1st column: sequenceID (must be part of the assembly)
+        # 2nd column: TaxID (a NCBI TaxID)
+        # 3rd column: score (a numerical score)
     blastn \
+        -task megablast \
         -db nt \
         -query "$1" \
-        -out "${qc}"/blast/$(basename "${1%.fasta}").blastn.tsv \
-        -evalue "1e-10" \
-        -outfmt '6 qseqid sseqid stitle pident length mismatch gapopen qstart qend sstart send evalue bitscore' \
+        -out "${qc}"/blast/"${sample}".all.blastn.tsv \
+        -evalue "1e-25" \
+        -outfmt '6 qseqid staxids bitscore sseqid stitle pident length mismatch gapopen qstart qend sstart send evalue sscinames sskingdoms' \
         -num_threads $((cpu/maxProc)) \
-        -max_target_seqs 1 \
-        -max_hsps 1
+        -culling_limit 5
 
-    echo -e "qseqid\tsseqid\tstitle\tpident\tlength\tmismatch\tgapopen\tqstart\tqend\tsstart\tsend\tevalue\tbitscore" \
-        > "${qc}"/blast/$(basename "${1%.fasta}").blastn.tsv.tmp
-    cat "${qc}"/blast/$(basename "${1%.fasta}").blastn.tsv >> "${qc}"/blast/$(basename "${1%.fasta}").blastn.tsv.tmp
-    mv "${qc}"/blast/$(basename "${1%.fasta}").blastn.tsv.tmp "${qc}"/blast/$(basename "${1%.fasta}").blastn.tsv
+    # Best hit only
+    echo -e "qseqid\tsseqid\tstitle\tpident\tlength\tmismatch\tgapopen\tqstart\tqend\tsstart\tsend\tevalue\tbitscore\tsscinames\tsskingdoms\tstaxids" \
+        > "${qc}"/blast/"${sample}".blastn.tsv.tmp
+
+    cat "${qc}"/blast/"${sample}".all.blastn.tsv \
+        | sort -k1,1n -k3,3gr \
+        | sort -uk1,1n \
+        | awk -F $'\t' 'BEGIN {OFS = FS} {print $1, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $3, $15, $16, $2}' \
+        >> "${qc}"/blast/"${sample}".blastn.tsv.tmp
+
+    mv "${qc}"/blast/"${sample}".blastn.tsv.tmp \
+        "${qc}"/blast/"${sample}".bestHit.blastn.tsv
+
+    # Formated for Blobtools
+    [ -d "${blob}"/"$sample" ] || mkdir -p "${blob}"/"$sample"
+    cat "${qc}"/blast/"${sample}".all.blastn.tsv \
+        | awk -F $'\t' 'BEGIN {OFS = FS} {print $1, $2, $3}' \
+        > "${blob}"/"${sample}"/"${sample}".blast_nt.tsv
 }
 
 export -f blast
@@ -993,6 +1078,7 @@ find "$ordered" -type f -name "*trimmed"${smallest_contig}"_ordered.fasta" \
                 --env cpu \
                 --env maxProc \
                 --env qc \
+                --env blob \
                 --jobs "$maxProc" \
                 "blast {}"
 
@@ -1116,6 +1202,8 @@ for i in $(find "$ordered" -type f -name "*trimmed"${smallest_contig}"_ordered.f
     genomes+=("$i")
 done
 
+source activate quast
+
 quast.py \
     --output-dir "${qc}"/quast/all \
     --threads "$cpu" \
@@ -1151,6 +1239,7 @@ find "$ordered" -type f -name "*trimmed"${smallest_contig}"_ordered.fasta" \
                 --jobs "$maxProc" \
                 "run_quast {}"
 
+source deactivate
 
 ### kat ###
 
@@ -1264,16 +1353,18 @@ function run_blobtools ()
         -o "${blob}"/"${sample}"/
 
     #blast assembly on nt
-    # TODO -> modify previous blast so it can be reused here
-    blastn \
-        -task megablast \
-        -query "$genome" \
-        -db nt \
-        -out "${blob}"/"${sample}"/"${sample}".blast_nt.tsv \
-        -outfmt '6 qseqid staxids bitscore std sscinames sskingdoms stitle' \
-        -culling_limit 5 \
-        -evalue 1e-25 \
-        -num_threads $((cpu/maxProc))
+    # 1st column: sequenceID (must be part of the assembly)
+    # 2nd column: TaxID (a NCBI TaxID)
+    # 3rd column: score (a numerical score)
+    # blastn \
+    #     -task megablast \
+    #     -query "$genome" \
+    #     -db nt \
+    #     -out "${blob}"/"${sample}"/"${sample}".blast_nt.tsv \
+    #     -outfmt '6 qseqid staxids bitscore std sscinames sskingdoms stitle' \
+    #     -culling_limit 5 \
+    #     -evalue 1e-25 \
+    #     -num_threads $((cpu/maxProc))
 
     # Create BlobDB
     blobtools create \
@@ -1470,13 +1561,13 @@ function run_resfinder ()
 {
     sample=$(cut -d "_" -f 1 <<< $(basename "$1"))
 
-    [ -d "${amr}"/"${sample}"/"$db" ] || mkdir -p "${amr}"/"${sample}"/"$db"
+    [ -d "${amr}"/"${sample}"/"$resfinder_db" ] || mkdir -p "${amr}"/"${sample}"/"$resfinder_db"
 
     perl "${prog}"/resfinder/resfinder.pl \
         -d "${prog}"/resfinder/resfinder_db/ \
-        -a "$db" \
+        -a "$resfinder_db" \
         -i "$1" \
-        -o "${amr}"/"$sample"/"$db" \
+        -o "${amr}"/"$sample"/"$resfinder_db" \
         -k 90 \
         -l 60
 }
@@ -1484,11 +1575,11 @@ function run_resfinder ()
 export -f run_resfinder
 
 for h in $(find "${prog}"/resfinder/resfinder_db -type f -name "*.fsa"); do
-    export db=$(sed 's/\.fsa//' <<< $(basename "$h"))
+    export resfinder_db=$(sed 's/\.fsa//' <<< $(basename "$h"))
 
     find "$ordered" -type f -name "*trimmed"${smallest_contig}"_ordered.fasta" | \
         parallel --env run_resfinder \
-            --env db \
+            --env resfinder_db \
             "run_resfinder {}"
 done
 
