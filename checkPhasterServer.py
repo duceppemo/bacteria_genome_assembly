@@ -38,16 +38,22 @@ class CheckPhasterServer(object):
             name = os.path.basename(json_file).split('.')[0].split('_')[0]  # Everything before the 1st underscore
 
             # Parse json file
-            data = json.load(open(json_file))
-            job_id = data['job_id']
-            status = data['status']
-
-            self.jobs_dict[name]['job_id'] = job_id
-            self.jobs_dict[name]['status'] = status
-
-            if status in 'Complete':
-                zip_url = data['zip']
-                self.jobs_dict[name]['zip_url'] = zip_url
+            try:
+                data = json.load(open(json_file))
+                job_id = data['job_id']
+                self.jobs_dict[name]['job_id'] = job_id
+                try:
+                    status = data['status']
+                    self.jobs_dict[name]['status'] = status
+                    if status in 'Complete':
+                        zip_url = data['zip']
+                        self.jobs_dict[name]['zip_url'] = zip_url
+                except KeyError:
+                    self.jobs_dict[name]['job_id'] = job_id
+                    self.jobs_dict[name]['status'] = 'error'
+                    print("There was a problem running PHASTER for %s (%s)" % (name, job_id))
+            except json.decoder.JSONDecodeError:
+                print("JSON file for sample %s is empty. Upload process to PHASTER server failed." % name)
 
     def update_json(self):
         """
@@ -78,6 +84,7 @@ class CheckPhasterServer(object):
         {"job_id":"ZZ_f86d1fb67c","status":"You're next!..."} -> rank = 2
         {"job_id":"ZZ_f86d1fb67c","status":"Running..."} -> rank = 1
         {"job_id":"ZZ_097f311c05","status":"Complete","zip":"phaster.ca/submissions/ZZ_097f311c05.zip" -> rank = 0
+        {"job_id":"ZZ_ccc1cf07f5","error":"There was a problem running PHASTER..."} ->
         """
 
         for sample_name in self.jobs_dict:
@@ -115,10 +122,10 @@ class CheckPhasterServer(object):
                 url = 'http://' + self.jobs_dict[sample]['zip_url']
                 print("Downloading Phaster results for %s" % sample)
                 print(url)
-                # self.download_file(url, self.folder, sample + '_phaster.zip')  # TODO -> Do in a separate thread
+                self.download_file(url, self.folder, sample + '_phaster.zip')  # TODO -> Do in a separate thread
         if max_rank > 0:  # Wait
             wait_time = max_rank * 3
-            print("%d samples still waiting for processing" % len(rank_list) - len(completed_samples_to_get))
+            print("%d samples still waiting for processing" % (len(rank_list) - len(completed_samples_to_get)))
             print("There are %d submission(s) ahead your first one." % min_rank)
             print("There are %d submission(s) ahead your last one" % max_rank)
             print("Waiting %d minutes (based on your last submission) before trying to download again..." % wait_time)
