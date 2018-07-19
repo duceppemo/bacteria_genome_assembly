@@ -1,6 +1,6 @@
 #!/bin/bash
 
-version="0.2.3"
+version="0.2.4"
 
 
 ######################
@@ -871,7 +871,11 @@ function assemble ()
     cp "${assembly}"/"${sample}"/assembly.fasta \
         "${assembly}"/"${sample}"/"${sample}".fasta
 
-    find "${assembly}"/"${sample}"/pilon_polish ! -name "*.out" ! -name "*.changes" -exec rm -rf {} \;
+
+    # Cleanup
+    find "${assembly}"/"${sample}"/pilon_polish -type f ! -name "*.out" ! -name "*.changes" -exec rm -rf {} \;
+    rm -rf "${assembly}"/"${sample}"/blast "${assembly}"/"${sample}"/spades_assembly 2>/dev/null  # in case there's no blast folder
+    find "${assembly}"/"${sample}" -type f -name "00?_*.gfa" -exec rm {} \;
 }
 
 export -f assemble
@@ -886,6 +890,9 @@ find "$merged" -type f -name "*_merged.fastq.gz" | \
                 --env prog \
                 --jobs "$maxProc" \
                 "assemble {}"
+
+# Cleanup
+rm -rf "$merged"
 
 function trimAssembly()
 {
@@ -1053,8 +1060,8 @@ function blast()
         > "${qc}"/blast/"${sample}".blastn.tsv.tmp
 
     cat "${qc}"/blast/"${sample}".all.blastn.tsv \
-        | sort -k1,1n -k3,3gr \
-        | sort -uk1,1n \
+        | sort -t $'\t' -k1,1g -k3,3gr \
+        | sort -t $'\t' -uk1,1g \
         | awk -F $'\t' 'BEGIN {OFS = FS} {print $1, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $3, $15, $16, $2}' \
         >> "${qc}"/blast/"${sample}".blastn.tsv.tmp
 
@@ -1352,20 +1359,6 @@ function run_blobtools ()
         -b "${qc}"/coverage/"${sample}"/"${sample}".bam \
         -o "${blob}"/"${sample}"/
 
-    #blast assembly on nt
-    # 1st column: sequenceID (must be part of the assembly)
-    # 2nd column: TaxID (a NCBI TaxID)
-    # 3rd column: score (a numerical score)
-    # blastn \
-    #     -task megablast \
-    #     -query "$genome" \
-    #     -db nt \
-    #     -out "${blob}"/"${sample}"/"${sample}".blast_nt.tsv \
-    #     -outfmt '6 qseqid staxids bitscore std sscinames sskingdoms stitle' \
-    #     -culling_limit 5 \
-    #     -evalue 1e-25 \
-    #     -num_threads $((cpu/maxProc))
-
     # Create BlobDB
     blobtools create \
         -i "$genome" \
@@ -1439,6 +1432,9 @@ find "${qc}"/coverage -mindepth 1 -maxdepth 1 -type d -exec rm -rf {} \;
 # Deactivate the virtual environment
 deactivate
 
+#Cleanup
+rm -rf "$corrected"
+
 
 ###################
 #                 #
@@ -1500,11 +1496,7 @@ function annotate()
     perl "${scripts}"/http_post.pl \
         "${annotation}"/"${sample}"/accession.list \
         "${annotation}"/"${sample}"/extra_hits.fasta
-    # esearch -db protein -query "$(cat "${spadesOut}"/annotation/accession.list)" | \
-    #     efetch -db protein -format fasta \
-    #     > "${spadesOut}"/annotation/extra_hits.fasta
 
-    #TODO -> Cleanup sequence titles. E.g. "MULTISPECIES: "
     # Make first letter uppercase
     # remove duplicate entries
     cat "${annotation}"/"${sample}"/extra_hits.fasta \
