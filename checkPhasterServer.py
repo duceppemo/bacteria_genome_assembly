@@ -5,12 +5,66 @@ import os.path
 import glob
 import json
 import time
+import mimetypes
+import codecs
+import uuid
+
+import io
+import os
 import sys
-from progress.bar import Bar
 
 
 __author__ = 'duceppemo'
-__version__ = '0.2'
+__version__ = '0.2.1'
+
+
+class MultipartFormdataEncoder(object):
+    def __init__(self):
+        self.boundary = uuid.uuid4().hex
+        self.content_type = 'multipart/form-data; boundary={}'.format(self.boundary)
+
+    @classmethod
+    def u(cls, s):
+        if sys.hexversion < 0x03000000 and isinstance(s, str):
+            s = s.decode('utf-8')
+        if sys.hexversion >= 0x03000000 and isinstance(s, bytes):
+            s = s.decode('utf-8')
+        return s
+
+    def iter(self, fields, files):
+        """
+        fields is a sequence of (name, value) elements for regular form fields.
+        files is a sequence of (name, filename, file-type) elements for data to be uploaded as files
+        Yield body's chunk as bytes
+        """
+        encoder = codecs.getencoder('utf-8')
+        for (key, value) in fields:
+            key = self.u(key)
+            yield encoder('--{}\r\n'.format(self.boundary))
+            yield encoder(self.u('Content-Disposition: form-data; name="{}"\r\n').format(key))
+            yield encoder('\r\n')
+            if isinstance(value, int) or isinstance(value, float):
+                value = str(value)
+            yield encoder(self.u(value))
+            yield encoder('\r\n')
+        for (key, filename, fpath) in files:
+            key = self.u(key)
+            filename = self.u(filename)
+            yield encoder('--{}\r\n'.format(self.boundary))
+            yield encoder(self.u('Content-Disposition: form-data; name="{}"; filename="{}"\r\n').format(key, filename))
+            yield encoder('Content-Type: {}\r\n'.format(mimetypes.guess_type(filename)[0] or 'application/octet-stream'))
+            yield encoder('\r\n')
+            with open(fpath,'rb') as fd:
+                buff = fd.read()
+                yield (buff, len(buff))
+            yield encoder('\r\n')
+        yield encoder('--{}--\r\n'.format(self.boundary))
+
+    def encode(self, fields, files):
+        body = io.BytesIO()
+        for chunk, chunk_len in self.iter(fields, files):
+            body.write(chunk)
+        return self.content_type, body.getvalue()
 
 
 class CheckPhasterServer(object):
@@ -38,10 +92,16 @@ class CheckPhasterServer(object):
                 self.error('Please provide an input folder with fasta files to submit using the "-i" option')
             # Work on fasta files
             self.list_assemblies(self.input_folder)
+
+            #Setup progress bar
+            counter = 0
             total_samples = len(self.fasta_list)
-            bar = Bar('Submitting', max=total_samples)
             for fasta in self.fasta_list:
                 if self.check_fasta(fasta) is True:
+                    counter += 1
+                    sample_name = os.path.basename(fasta).split("_")[0]
+                    sys.stdout.write('\rSubmitting sample "' + sample_name
+                                     + '" (' + str(counter) + '/' + str(total_samples) + ')')
                     self.submit_assembly(fasta)
                 else:
                     print("The following file does now meet PHASTER requirements for minimum contig length" +
@@ -49,8 +109,8 @@ class CheckPhasterServer(object):
                     print(fasta + "\n")
                 # Clear dictionary
                 self.fasta_dict.clear()
-                bar.next()
-            bar.finish()
+                sys.stdout.flush()
+
         if self.check:
             if not self.output_folder:
                 self.error('Please provide an output folder with json files to check status using the "-o" option')
@@ -136,26 +196,31 @@ class CheckPhasterServer(object):
         """
         import requests
 
-        if len(self.fasta_dict.keys()) == 1:
+        if len(self.fasta_dict.keys()) == 1:  # if one contig
             api_url = 'http://phaster.ca/phaster_api'
-        else:  # if len(self.fasta_dict.keys()) > 1
+        else:  # if more than 1 contig
             api_url = 'http://phaster.ca/phaster_api?contigs=1'
 
         sample = os. path.basename(f).split('_')[0]
-        with open(f, 'r') as file_handle:
-            r = requests.post(api_url, files={f: file_handle})  # response is a json file
+        with open(f, 'rb') as my_file:
+            data = my_file.read()
 
-            # if status not OK (a 4XX client error or 5XX server error response)
-            # if r.status_code != 200:  # 200 = OK
-            if r.status_code != requests.codes.ok:
-                # Write error to file
-                with open(self.output_folder + '/' + sample + '.error', 'w') as json_out_handle:
-                    json_out_handle.write(r.text)
-                # r.raise_for_status()  # Not sure I Want to raise and Exception here...
-            else:
-                # save json to file
-                with open(self.output_folder + '/' + sample + '.json', 'w') as json_out_handle:
-                    json_out_handle.write(r.text)
+        # Header must have 'Content-Type': 'application/x-www-form-urlencoded', thus need to use "data:
+        # "files" wont work, "multipart/form-data" is not supported
+        r = requests.post(api_url, data=data)  # response is a json file
+        # prepared = r.request  # Debug
+
+        # if status not OK (a 4XX client error or 5XX server error response)
+        # if r.status_code != 200:  # 200 = OK
+        if r.status_code != requests.codes.ok:
+            # Write error to file
+            with open(self.output_folder + '/' + sample + '.error', 'w') as json_out_handle:
+                json_out_handle.write(r.text)
+            # r.raise_for_status()  # Not sure I Want to raise and Exception here...
+        else:
+            # save json to file
+            with open(self.output_folder + '/' + sample + '.json', 'w') as json_out_handle:
+                json_out_handle.write(r.text)
 
     def parse_json(self):
         """
@@ -250,14 +315,18 @@ class CheckPhasterServer(object):
             for sample in completed_samples_to_get:
                 url = 'http://' + self.jobs_dict[sample]['zip_url']
                 print("Downloading Phaster results for %s" % sample)
-                print(url)
+                print("\t%s" % url)
                 self.download_file(url, self.output_folder, sample + '_phaster.zip')  # TODO -> Do in a separate thread
         if max_rank > 0:  # Wait
             wait_time = max_rank * 3
-            print("%d samples still waiting for processing" % (len(rank_list) - len(completed_samples_to_get)))
-            print("There are %d submission(s) ahead your first one." % min_rank)
-            print("There are %d submission(s) ahead your last one" % max_rank)
-            print("Waiting %d minutes (based on your last submission) before trying to download again..." % wait_time)
+            print("\nYou still have %d samples waiting for processing:"
+                  % (len(rank_list) - len(completed_samples_to_get)))
+            print("\tThere are %d submission(s) ahead of you before your first submitted file is processed."
+                  % min_rank)
+            print("\tThere are %d submission(s) ahead of you before your last submitted file is processed"
+                  % max_rank)
+            print("Waiting %d minutes (based on longer estimated wait time) before trying to download again..."
+                  % wait_time)
             time.sleep(wait_time * 60)
             self.update_json()
             self.get_ranks()
