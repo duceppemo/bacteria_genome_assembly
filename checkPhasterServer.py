@@ -5,8 +5,12 @@ import os.path
 import glob
 import json
 import time
+import sys
+from progress.bar import Bar
+
 
 __author__ = 'duceppemo'
+__version__ = '0.2'
 
 
 class CheckPhasterServer(object):
@@ -14,19 +18,144 @@ class CheckPhasterServer(object):
     def __init__(self, args):
         # Define variables based on supplied arguments
         self.args = args
-        self.folder = args.folder
+        self.input_folder = args.input
+        self.output_folder = args.output
+        self.check = args.check
+        self.submit = args.submit
 
         # Shared data structure(s)
+        self.fasta_list = list()
+        self.fasta_dict = collections.defaultdict(dict)
         self.jobs_dict = collections.defaultdict(dict)
 
         # run the script
         self.run()
 
     def run(self):
-        self.parse_json()
-        self.update_json()
-        self.get_ranks()
-        self.choose_next()
+        # check which flag has been used
+        if self.submit:
+            if not self.input_folder:
+                self.error('Please provide an input folder with fasta files to submit using the "-i" option')
+            # Work on fasta files
+            self.list_assemblies(self.input_folder)
+            total_samples = len(self.fasta_list)
+            bar = Bar('Submitting', max=total_samples)
+            for fasta in self.fasta_list:
+                if self.check_fasta(fasta) is True:
+                    self.submit_assembly(fasta)
+                else:
+                    print("The following file does now meet PHASTER requirements for minimum contig length" +
+                          " and wont be submitted for phage analysis:")
+                    print(fasta + "\n")
+                # Clear dictionary
+                self.fasta_dict.clear()
+                bar.next()
+            bar.finish()
+        if self.check:
+            if not self.output_folder:
+                self.error('Please provide an output folder with json files to check status using the "-o" option')
+            # Work on json files retrieved from the phaster server
+            self.parse_json()
+            self.update_json()
+            self.get_ranks()
+            self.choose_next()
+
+        if not self.check and not self.submit:
+            self.error("Please use the %s and/or the %s flag(s)" %('"--check"', '"--submit"'))
+
+    def parse_fasta(self, f, d):
+        """
+        Parse fasta file into dictionary
+        :param f: Input fasta file
+        :param d: empty dictionary
+        :return: populated dictionary
+        """
+        seqid, seq = None, []
+        with open(f, 'r') as file:
+            for line in file:
+                line = line.rstrip()
+                if not line:
+                    continue
+                if line.startswith('>'):
+                    if seqid and seq:
+                        d[seqid] = ''.join(seq)
+                        seqid = line[1:].split(" ")[0]
+                        seq = []
+                    else:  # for the first entry
+                        seqid = line[1:].split(" ")[0]
+                else:
+                    seq.append(line)
+            if seqid and seq:  # for the last entry
+                d[seqid] = ''.join(seq)
+
+    def list_assemblies(self, folder):
+        """
+        List the fasta files to upload to phaster server.
+        :param folder: The folder containing the assemblies in fasta format.
+        :return: A populated list of fasta file
+        """
+        for assembly in glob.iglob(folder + '/*.fasta'):
+            self.fasta_list.append(assembly)
+
+    def check_fasta(self, f):
+        """
+        Check if fasta files meets phaster server requirements
+        if one entry:
+            min_contig_size = 1500 bp
+        elif 2 entries or more:
+            min_contig_size = 2000 bp
+        else:
+            error(no entry in fasta file
+        :param f: input fasta file
+        :return: True or False
+        """
+
+        self.parse_fasta(f, self.fasta_dict)
+        flag = None
+
+        if len(self.fasta_dict.keys()) == 1:
+            if len(self.fasta_dict.values()) >= 1500:
+                flag = True
+            else:
+                flag = False
+        elif len(self.fasta_dict.keys()) == 0:
+            flag = False
+        else:  # > 1
+            for id, seq in self.fasta_dict.items():
+                if len(seq) >= 2000:
+                    flag = True
+                else:
+                    flag = False
+                    break
+        return flag
+
+    def submit_assembly(self, f):
+        """
+        Submit the fasta file to the server via their API
+        :return:
+        """
+        import requests
+
+        if len(self.fasta_dict.keys()) == 1:
+            api_url = 'http://phaster.ca/phaster_api'
+        else:  # if len(self.fasta_dict.keys()) > 1
+            api_url = 'http://phaster.ca/phaster_api?contigs=1'
+
+        sample = os. path.basename(f).split('_')[0]
+        with open(f, 'r') as file_handle:
+            r = requests.post(api_url, files={f: file_handle})  # response is a json file
+
+            # if status not OK (a 4XX client error or 5XX server error response)
+            # if r.status_code != 200:  # 200 = OK
+            if r.status_code != requests.codes.ok:
+                # Write error to file
+                with open(self.output_folder + '/' + sample + '.error', 'w') as json_out_handle:
+                    json_out_handle.write(r.text)
+                # r.raise_for_status()  # Not sure I Want to raise and Exception here...
+            else:
+                # save json to file
+                with open(self.output_folder + '/' + sample + '.json', 'w') as json_out_handle:
+                    json_out_handle.write(r.text)
 
     def parse_json(self):
         """
@@ -34,7 +163,7 @@ class CheckPhasterServer(object):
         :return: An updated dictionary
         """
         # Look for all json files in folder
-        for json_file in glob.iglob(self.folder + '/*.json'):
+        for json_file in glob.iglob(self.output_folder + '/*.json'):
             name = os.path.basename(json_file).split('.')[0].split('_')[0]  # Everything before the 1st underscore
 
             # Parse json file
@@ -62,7 +191,7 @@ class CheckPhasterServer(object):
         """
 
         # Check if some result files are already downloaded
-        zip_list = [os.path.basename(z).split('.')[0].split('_')[0] for z in glob.iglob(self.folder + '/*.zip')]
+        zip_list = [os.path.basename(z).split('.')[0].split('_')[0] for z in glob.iglob(self.output_folder + '/*.zip')]
 
         # Only update the json files with no zip file (Phaster analysis completed and results downloaded)
         for sample, item in self.jobs_dict.items():
@@ -70,7 +199,7 @@ class CheckPhasterServer(object):
                 url = 'http://phaster.ca/phaster_api?acc=' + item['job_id']
                 print("Updating %s.json" % sample)
                 print(url)
-                self.download_file(url, self.folder, sample + '.json')
+                self.download_file(url, self.output_folder, sample + '.json')
 
         # Parse the newly downloaded json files
         self.parse_json()
@@ -113,7 +242,7 @@ class CheckPhasterServer(object):
         completed_samples = [k for k, item in self.jobs_dict.items() if item['rank'] == 0]
         # No need to retrieve that ones we already have
         completed_samples_to_get = [s for s in completed_samples
-                                    if not os.path.exists(self.folder + '/' + s + '_phaster.zip')]
+                                    if not os.path.exists(self.output_folder + '/' + s + '_phaster.zip')]
 
         # Go ahead and download whatever is completed if don't have it already
         if completed_samples_to_get:
@@ -122,7 +251,7 @@ class CheckPhasterServer(object):
                 url = 'http://' + self.jobs_dict[sample]['zip_url']
                 print("Downloading Phaster results for %s" % sample)
                 print(url)
-                self.download_file(url, self.folder, sample + '_phaster.zip')  # TODO -> Do in a separate thread
+                self.download_file(url, self.output_folder, sample + '_phaster.zip')  # TODO -> Do in a separate thread
         if max_rank > 0:  # Wait
             wait_time = max_rank * 3
             print("%d samples still waiting for processing" % (len(rank_list) - len(completed_samples_to_get)))
@@ -160,16 +289,42 @@ class CheckPhasterServer(object):
 
         time.sleep(1)  # Phaster server seems to be happier by waiting a bit between requests
 
+    def error(self, message):
+        """
+        Display error type and help
+        :param message: Error string
+        :return: Error and help message
+        """
+        sys.stderr.write('error: %s\n' % message)
+        parser.print_help()
+        sys.exit(2)
+
 
 if __name__ == '__main__':
 
     from argparse import ArgumentParser
 
-    parser = ArgumentParser(description='Check status of submissions on Phaster\'s server'
-                                        'and download results when available')
-    parser.add_argument('-f', '--folder', metavar='/phaster/',
+    parser = ArgumentParser(description='Submit fasta and/or check status of submissions on Phaster\'s server'
+                                        'and download results when available. Will run util all the samples'
+                                        'have been retrieved. Status is updated every "n" minutes,'
+                                        'where n = number of samples in queue * 3 minutes')
+    parser.add_argument('--submit', action='store_true',
+                        help='Use this flag to submit your fasta file(s) to phaster'
+                             'Requires "-i"'
+                             'A json status file will be created after submission')
+    parser.add_argument('--check', action='store_true',
+                        help='Check status of submission on phaster server.'
+                             'Requires "-o".'
+                             'Looking for json files in the output folder ("-o")'
+                             'Will update json files and download result file if analysis completed')
+    parser.add_argument('-i', '--input', metavar='/assembly_folder/',
+                        required=False,
+                        help='Folder holding the input fasta files')
+    parser.add_argument('-o', '--output', metavar='/result_folder/',
                         required=True,
-                        help='Folder holding the json files')
+                        help='Folder to save the phaster result files'
+                             'Required'
+                             'Also used to save the json status files from the phaster API')
 
     # Get the arguments into an object
     arguments = parser.parse_args()
