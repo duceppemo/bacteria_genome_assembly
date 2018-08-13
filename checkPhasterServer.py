@@ -56,6 +56,7 @@ class CheckPhasterServer(object):
                 # Clear dictionary
                 self.fasta_dict.clear()
                 sys.stdout.flush()
+            print('\n')
 
         if self.check:
             if not self.output_folder:
@@ -76,6 +77,7 @@ class CheckPhasterServer(object):
         :param d: empty dictionary
         :return: populated dictionary
         """
+
         seqid, seq = None, []
         with open(f, 'r') as file:
             for line in file:
@@ -100,8 +102,12 @@ class CheckPhasterServer(object):
         :param folder: The folder containing the assemblies in fasta format.
         :return: A populated list of fasta file
         """
+
         for assembly in glob.iglob(folder + '/*.fasta'):
             self.fasta_list.append(assembly)
+
+        if not self.fasta_list:
+            self.error('The provided input folder contains no ".fasta" files')
 
     def check_fasta(self, f):
         """
@@ -140,6 +146,7 @@ class CheckPhasterServer(object):
         Submit the fasta file to the server via their API
         :return:
         """
+
         import requests
 
         if len(self.fasta_dict.keys()) == 1:  # if one contig
@@ -173,6 +180,7 @@ class CheckPhasterServer(object):
         Parse json file into a dictionary
         :return: An updated dictionary
         """
+
         # Look for all json files in folder
         for json_file in glob.iglob(self.output_folder + '/*.json'):
             name = os.path.basename(json_file).split('.')[0].split('_')[0]  # Everything before the 1st underscore
@@ -201,16 +209,26 @@ class CheckPhasterServer(object):
         :return:
         """
 
+        from time import sleep
+
         # Check if some result files are already downloaded
         zip_list = [os.path.basename(z).split('.')[0].split('_')[0] for z in glob.iglob(self.output_folder + '/*.zip')]
 
+        counter = 0
+        to_update = len(self.jobs_dict.keys()) - len(zip_list)
         # Only update the json files with no zip file (Phaster analysis completed and results downloaded)
-        for sample, item in self.jobs_dict.items():
-            if sample not in zip_list:
-                url = 'http://phaster.ca/phaster_api?acc=' + item['job_id']
-                print("Updating %s.json" % sample)
-                print(url)
-                self.download_file(url, self.output_folder, sample + '.json')
+        if to_update > 0:
+            print("\n%d json files to update:" % to_update)
+            for sample, item in self.jobs_dict.items():
+                if sample not in zip_list:
+                    counter += 1
+                    url = 'http://phaster.ca/phaster_api?acc=' + item['job_id']
+                    print("Updating %s.json (%d/%d)" % (sample, counter, to_update))
+                    print(url)
+                    self.download_file(url, self.output_folder, sample + '.json')
+                    sleep(10)
+        else:
+            print("All zip files already downloaded, skipping json file updating")
 
         # Parse the newly downloaded json files
         self.parse_json()
@@ -257,7 +275,7 @@ class CheckPhasterServer(object):
 
         # Go ahead and download whatever is completed if don't have it already
         if completed_samples_to_get:
-            print("%d new samples ready to download" % len(completed_samples_to_get))
+            print("\n%d new samples ready to download:" % len(completed_samples_to_get))
             for sample in completed_samples_to_get:
                 url = 'http://' + self.jobs_dict[sample]['zip_url']
                 print("Downloading Phaster results for %s" % sample)
@@ -294,15 +312,12 @@ class CheckPhasterServer(object):
             opener = urllib.request.build_opener()
             opener.addheaders = [('User-agent', 'Mozilla/5.0')]
             opener.open(url)
-            # req = urllib.request.Request(url)
-            # req.add_header('User-Agent', 'Mozilla/5.0 (X11; U; Linux i686) Gecko/20071127 Firefox/2.0.0.11')
-            # with urllib.request.urlopen(url) as response, open(path + '/' + name, 'wb') as out_file:
             with opener.open(url) as response, open(path + '/' + name, 'wb') as out_file:
                 shutil.copyfileobj(response, out_file)
         except urllib.error.HTTPError as e:
             print("Error %d. Could not download %s from \"%s\"" % (e.code, name, url))
 
-        time.sleep(1)  # Phaster server seems to be happier by waiting a bit between requests
+        time.sleep(10)  # Phaster server seems to be happier by waiting a bit between requests (Authors recommend 60s)
 
     def error(self, message):
         """
