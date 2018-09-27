@@ -1,6 +1,6 @@
 #!/bin/bash
 
-version="0.2.4"
+version="0.2.5"
 
 
 ######################
@@ -734,7 +734,7 @@ function preprocess_reads ()
     [ -d "${qc}"/insert_size/"${sample}" ] || mkdir -p "${qc}"/insert_size/"${sample}"
 
     # Insert size
-    cat "${logs}"/correction_step1/ihist_corr_merge.txt \
+    cat "${logs}"/correction_step1/"${sample}"_ihist_corr_merge.txt \
         | grep -vE "^#" \
         > "${qc}"/insert_size/"${sample}"/"${sample}"_insert_bbtools.tsv
 
