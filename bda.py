@@ -1,7 +1,7 @@
 #!/usr/local/env python3
 
 __author__ = 'duceppemo, OldAdam70'
-__version__ = '0.1'
+__version__ = '0.1.1'
 
 
 import os
@@ -134,7 +134,7 @@ class BDA(object):
 
         # Open output file handle in write mode
         with open(self.output, 'w') as f:
-            for id, qresult in records_dict.items():
+            for seq_id, qresult in records_dict.items():
                 hit_descriptions = []
                 e_values = []
                 bit_scores = []
@@ -146,7 +146,7 @@ class BDA(object):
                     # Filter out uninformative hits here, create a list containing the remaining hits
                     # If there are hits left after the filtering, find the MIH
                     # If no hits are left after filtering, just return "hypothetical protein"
-                    if not any([filter in str(hit_desc).lower() for filter in filter_strings]):
+                    if not any([x in str(hit_desc).lower() for x in filter_strings]):
                         hit_descriptions.append(hit_desc)
                         e_values.append(hit.hsps[0].evalue)
                         bit_scores.append(hit.hsps[0].bitscore)
@@ -155,10 +155,10 @@ class BDA(object):
                     proper_desc = self.identify_mih(hit_descriptions, bit_scores)
 
                     # Update description according to "find_best_description"
-                    self.contigs_dict[id].description = proper_desc
+                    self.contigs_dict[seq_id].description = proper_desc
 
-                # Write to output file
-                f.write('>{} {}\n{}\n'.format(id, proper_desc, self.contigs_dict[id].seq))
+                    # Write to output file only the ones with new description
+                    f.write('>{} {}\n{}\n'.format(seq_id, proper_desc, self.contigs_dict[seq_id].seq))
 
         # Close file StringIO handle
         blast_handle.close()
@@ -205,9 +205,9 @@ class BDA(object):
             cluster_scores[cluster] += score
 
         # Find out what descriptions the highest scored cluster is associated with, and return the description
-        MIH_index = list(cluster_associations).index(cluster_scores.index(max(cluster_scores)))
+        mih_index = list(cluster_associations).index(cluster_scores.index(max(cluster_scores)))
 
-        return hits_list[MIH_index]
+        return hits_list[mih_index]
 
     def check_dependencies(self):
         pass
