@@ -1,7 +1,7 @@
 #!/usr/local/env python3
 
-__author__ = 'duceppemo, OldAdam70'
-__version__ = '0.1.1'
+__author__ = 'duceppemo, chmaraj'
+__version__ = '0.1.2'
 
 
 import os
@@ -18,6 +18,7 @@ class BDA(object):
         self.args = args
         self.input = args.input
         self.output = args.output
+        self.xml = args.xml
 
         # Check input file
         self.check_input_file(self.input)
@@ -57,6 +58,12 @@ class BDA(object):
         # Check if input is a fasta file
         self.is_fasta(input_file)
 
+    def check_xml_file(self, input_file):
+        # Find a routine to check if xml file is valid
+
+        # Check if it's the matching xml for the input fasta
+        pass
+
     def check_output_file(self, output_file):
         # Check if output file was provided
         if self.output:
@@ -85,6 +92,9 @@ class BDA(object):
 
         self.contigs_dict = SeqIO.to_dict(SeqIO.parse(f, format='fasta'))
 
+    def parse_blast_xml(self, xml_file):
+        pass
+
     def run_blastn(self, ref_db, query):
         """
         Perform blastn using biopython
@@ -96,23 +106,35 @@ class BDA(object):
         from Bio.Blast.Applications import NcbiblastpCommandline
         from io import StringIO
 
-        print("Running blastp...")
-
-        ref_db = '/media/30tb_raid10/db/nr/nr'
-        blastx = NcbiblastpCommandline(db=ref_db, query=query, evalue='1e-10',
-                                       outfmt=5, max_target_seqs=20,
-                                       num_threads=self.cpus)
-        (stdout, stderr) = blastx()
-
-        if stderr:
-            raise Exception('There was a problem with the blast:\n{}'.format(stderr))
-
-        # Search stdout for matches - if the term Hsp appears (the .find function will NOT
-        # return -1), a match has been found, and stdout is written to file
-        if stdout.find('Hsp') != -1:
-            blast_handle = StringIO(stdout)  # Convert string to IO object
+        if self.xml:
+            print("Parsing xml file...")
+            blast_handle = open(self.xml, 'r')
         else:
-            raise Exception("No blast results found.")
+            print("Running blastp...")
+
+            ref_db = '/media/30tb_raid10/db/nr/nr'
+            blastx = NcbiblastpCommandline(db=ref_db, query=query, evalue='1e-10',
+                                           outfmt=5, max_target_seqs=20,
+                                           num_threads=self.cpus)
+            (stdout, stderr) = blastx()
+
+            if stderr:
+                raise Exception('There was a problem with the blast:\n{}'.format(stderr))
+
+            # Search stdout for matches - if the term Hsp appears (the .find function will NOT
+            # return -1), a match has been found, and stdout is written to file
+            if stdout.find('Hsp') != -1:
+                # Dump xml output to file
+                # Output file is equal to input file with "_blastp.xml" at the enf
+                filename, input_ext = os.path.splitext(os.path.basename(self.input))
+                output_xml = os.path.dirname(self.output) + '/' + filename + '_blastp.xml'
+                with open(output_xml, 'w') as f:
+                    f.write(stdout)
+
+                # Convert stdout (string; blastp output in xml format) to IO object
+                blast_handle = StringIO(stdout)
+            else:
+                raise Exception("No blast results found.")
 
         return blast_handle
 
@@ -217,10 +239,15 @@ if __name__ == '__main__':
 
     from argparse import ArgumentParser
 
-    parser = ArgumentParser(description='Reorder assembly to have the dnaA gene first')
+    parser = ArgumentParser(description='Blast Description Annotator'
+                                        'Try to update protein description when the best blast hit returns'
+                                        '"hypothetical protrein"')
     parser.add_argument('-i', '--input', metavar='input.fasta',
                         required=True,
                         help='Input fasta file to blast')
+    parser.add_argument('-x', '--xml', metavar='input.blastp.xml',
+                        required=False,
+                        help='Blastp output file (xml format) of the input fasta')
     parser.add_argument('-o', '--output', metavar='output_bda.fasta',
                         required=False,
                         help='Annotated fasta file with useful descriptions'
