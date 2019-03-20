@@ -10,7 +10,7 @@ import sys
 
 
 __author__ = 'duceppemo'
-__version__ = '0.2.2'
+__version__ = '0.2.3'
 
 
 class CheckPhasterServer(object):
@@ -45,7 +45,7 @@ class CheckPhasterServer(object):
             for fasta in self.fasta_list:
                 if self.check_fasta(fasta) is True:
                     counter += 1
-                    sample_name = os.path.basename(fasta).split("_")[0]
+                    sample_name = os.path.basename(fasta).split('.')[0].split('_')[0]
                     sys.stdout.write('\rSubmitting sample "' + sample_name
                                      + '" (' + str(counter) + '/' + str(total_samples) + ')')
                     self.submit_assembly(fasta)
@@ -228,7 +228,8 @@ class CheckPhasterServer(object):
                     self.download_file(url, self.output_folder, sample + '.json')
                     sleep(10)
         else:
-            print("All zip files already downloaded, skipping json file updating")
+            print("All result (zip) files already downloaded, exiting")
+            sys.exit()  # exit script, nothing else to do
 
         # Parse the newly downloaded json files
         self.parse_json()
@@ -283,8 +284,9 @@ class CheckPhasterServer(object):
                 self.download_file(url, self.output_folder, sample + '_phaster.zip')  # TODO -> Do in a separate thread
         if max_rank > 0:  # Wait
             wait_time = max_rank * 3
+            remaining = len(list(filter(lambda x: x > 0, rank_list)))  # how many ranks not equals to zero
             print("\nYou still have %d samples waiting for processing:"
-                  % (len(rank_list) - len(completed_samples_to_get)))
+                  % remaining)
             print("\tThere are %d submission(s) ahead of you before your first submitted file is processed."
                   % min_rank)
             print("\tThere are %d submission(s) ahead of you before your last submitted file is processed"
