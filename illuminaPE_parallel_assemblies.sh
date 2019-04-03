@@ -1,6 +1,6 @@
 #!/bin/bash
 
-version="0.2.5"
+version="0.2.7"
 
 
 ######################
@@ -14,21 +14,21 @@ version="0.2.5"
 export baseDir=""${HOME}"/analyses/salmonella_pigeon"
 
 #reads
-export reads="/media/6tb_raid10/data/salmonella_pigeon/merged"
+export reads="/media/30tb_raid10/data/salmonella_pigeon/merged"
 
 #program location
 export prog=""${HOME}"/prog"
 export scripts=""${HOME}"/scripts"
 
 # Centrifuge DB to use
-export centrifuge_db="/media/6tb_raid10/db/centrifuge/2017-10-12_bact_vir_h"
+export centrifuge_db="/media/30tb_raid10/db/centrifuge/2017-10-12_bact_vir_h"
 
 #Kraken DB to use
-export kraken_db="/media/6tb_raid10/db/kraken/refseq_BV_old"
+export kraken_db="/media/30tb_raid10/db/kraken/refseq_BV_old"
 
 #Maximum number of cores used per sample for parallel processing
 #A highier value reduces the memory footprint.
-export maxProc=8
+export maxProc=12
 
 #Annotation
 export kingdom="Bacteria"
@@ -67,7 +67,7 @@ export memCdHit=$((mem*1000))
 #Folder structure
 export fastq=""${baseDir}"/fastq"
 export logs=""${baseDir}"/logs"
-export qc=""${baseDir}"/QC"
+export qc=""${baseDir}"/qc"
 export fastqc=""${qc}"/fastqc"
 export kat=""${qc}"/kat"
 export genomescope=""${qc}"/genomescope"
@@ -345,6 +345,21 @@ find "$reads" -type f -name "*_R1*fastq.gz" \
                 --jobs "$maxProc" \
                 'compress_fastq {}'
 
+# or just create symbolic links
+function create_symlink()
+{
+    name=$(basename "$1")
+    sample=$(basename "$1" | cut -d '_' -f 1)
+    [ -d "${fastq}"/"$sample" ] || mkdir -p "${fastq}"/"$sample"
+    ln -s "$1" "${fastq}"/"${sample}"/"$name"
+}
+export -f create_symlink
+find "$reads" -type f -name "*fastq.gz" |
+    parallel    --bar \
+                --env create_symlink \
+                --env fastq \
+                'create_symlink {}'
+
 
 ###############
 #             #
@@ -375,7 +390,7 @@ function run_fastqc()
 
 export -f run_fastqc
 
-find "$fastq" -type f -name "*_R1*fastq.gz" \
+find -L "$fastq" -type f -name "*_R1*fastq.gz" \
     | parallel  --bar \
                 --env run_fastqc \
                 --env qc \
@@ -384,12 +399,15 @@ find "$fastq" -type f -name "*_R1*fastq.gz" \
                 --jobs "$maxProc" \
                 "run_fastqc {} "${qc}"/fastqc/raw"
 
+source activate multiqc
+
 #Merge all FastQC reports together
 multiqc \
     -o "${qc}"/fastqc/raw \
     -n merged_reports.html \
     "${qc}"/fastqc/raw
 
+source deactivate
 
 ### Read taxonomic assignement ###
 
@@ -424,7 +442,7 @@ function run_centrifuge()
         ktImportTaxonomy /dev/stdin -o "${2}"/"${sample}"/"${sample}".html
 }
 
-for i in $(find "$fastq" -type f -name "*_R1*fastq.gz"); do
+for i in $(find -L "$fastq" -type f -name "*_R1*fastq.gz"); do
     run_centrifuge "$i" "${qc}"/centrifuge/raw
 done
 
@@ -467,7 +485,7 @@ function run_kraken ()
 # Put database into memory (cheat)
 cat "${kraken_db}"/database.kdb > /dev/null  # About 6min to run
 
-for i in $(find "$fastq" -type f -name "*_R1*fastq.gz"); do
+for i in $(find -L "$fastq" -type f -name "*_R1*fastq.gz"); do
     run_kraken "$i" "${qc}"/kraken/raw
 done
 
@@ -535,7 +553,7 @@ export -f run_kat
 
 source activate kat
 # run samples in parallel
-find "$fastq" -type f -name "*R1*.fastq.gz" \
+find -L "$fastq" -type f -name "*R1*.fastq.gz" \
     | parallel  --bar \
                 --env run_kat \
                 --env cpu \
@@ -583,6 +601,9 @@ function genomeStats()
         | tr -d "\n" \
         | wc -m)
 
+    average_read_length=$(zcat "$1" \
+        | awk '{if(NR%4==2){count++;bases += length}} END{print bases/count}')
+
     Rscript "${prog}"/genomescope/genomescope.R \
         "${2}"/"${sample}"/"${sample}".histo \
         21 \
@@ -594,7 +615,7 @@ export -f genomeStats
 
 [ -d "${genomescope}"/raw ] || mkdir -p "${genomescope}"/raw
 
-find "$fastq" -type f -name "*_R1*" |
+find -L "$fastq" -type f -name "*_R1*" |
     parallel    --bar \
                 --env genomeStats \
                 --env output \
@@ -816,7 +837,7 @@ function preprocess_reads ()
 
 export -f preprocess_reads
 
-find "$fastq" -type f -name "*_R1*" |
+find -L "$fastq" -type f -name "*_R1*" |
     parallel    --bar \
                 --env preprocess_reads \
                 --env memJava \
@@ -831,10 +852,14 @@ find "$fastq" -type f -name "*_R1*" |
                 'preprocess_reads {}'
 
 #Merge all FastQC reports together
+source activate multiqc
+
 multiqc \
     -o "${qc}"/fastqc/merged \
     -n merged_reports.html \
     "${qc}"/fastqc/merged
+
+source deactivate multiqc
 
 rm -rf "$fastq" "$trimmed"
 
@@ -856,13 +881,13 @@ function assemble ()
     [ -d "${assembly}"/"$sample" ] || mkdir -p "${assembly}"/"$sample"
     
     #use merged paired-end as single-end reads
-    python3 "${prog}"/Unicycler/unicycler-runner.py \
+    unicycler \
         -1 "${m%_merged.fastq.gz}"_unmerged_1P.fastq.gz \
         -2 "${m%_merged.fastq.gz}"_unmerged_2P.fastq.gz \
         -s "$1" \
         -o "${assembly}"/"$sample" \
         -t $((cpu/maxProc)) \
-        --keep 3 \
+        --keep 2 \
         --no_correct \
         --verbosity 2 \
         --mode normal \
@@ -908,7 +933,7 @@ function trimAssembly()
 
 export -f trimAssembly
 
-find "${assembly}" -type f -maxdepth 2 -name "*.fasta" \
+find "${assembly}" -maxdepth 2 -type f -name "*.fasta" \
     | parallel  --bar \
                 --env prog \
                 --env smallest_contig \
@@ -997,6 +1022,8 @@ function order_contigs ()
                 -w 80
         fi
     else
+        # Circlator will set the begining of the contig at the middle of the
+        # contig if it doesn't find the dnaA gene.
         circlator fixstart \
             --verbose \
             "$1" \
@@ -1052,7 +1079,7 @@ function blast()
         -out "${qc}"/blast/"${sample}".all.blastn.tsv \
         -evalue "1e-25" \
         -outfmt '6 qseqid staxids bitscore sseqid stitle pident length mismatch gapopen qstart qend sstart send evalue sscinames sskingdoms' \
-        -num_threads $((cpu/maxProc)) \
+        -num_threads "$cpu" \
         -culling_limit 5
 
     # Best hit only
@@ -1079,15 +1106,25 @@ export -f blast
 
 [ -d "${qc}"/blast ] || mkdir -p "${qc}"/blast
 
-find "$ordered" -type f -name "*trimmed"${smallest_contig}"_ordered.fasta" \
-    | parallel  --bar \
-                --env blast \
-                --env cpu \
-                --env maxProc \
-                --env qc \
-                --env blob \
-                --jobs "$maxProc" \
-                "blast {}"
+# find "$ordered" -type f -name "*trimmed"${smallest_contig}"_ordered.fasta" \
+#     | parallel  --bar \
+#                 --env blast \
+#                 --env cpu \
+#                 --env maxProc \
+#                 --env qc \
+#                 --env blob \
+#                 --jobs "$maxProc" \
+#                 "blast {}"
+
+# It's actually faster to run the blast in series using all the cores for each samples.
+counter=0
+total=$(find "$ordered" -type f -name "*trimmed"${smallest_contig}"_ordered.fasta" | wc -l)
+for i in $(find "$ordered" -type f -name "*trimmed"${smallest_contig}"_ordered.fasta"); do
+    let counter+=1
+    sample=$(cut -d '_' -f 1 <<< $(basename "$1"))
+    echo -ne "Blasting "${sample}" ("${counter}"/"${total}")"\\r
+    blast "$i"
+done
 
 #clean blast index files
 find "$ordered" -type f ! -name "*.fasta" -exec rm {} \;
@@ -1098,47 +1135,50 @@ find "$ordered" -type f ! -name "*.fasta" -exec rm {} \;
 ########
 
 
-# ### Plasmid detection ###
+### Plasmid detection ###
 
-# # Detect contigs part of a plasmid
-# [ -d "${qc}"/plasmid ] || mkdir -p "${qc}"/plasmid
+# Detect contigs part of a plasmid
+[ -d "${qc}"/plasmid ] || mkdir -p "${qc}"/plasmid
 
-# function detect_plasmid ()
-# {
-#     # should be more elaborate than this...
-#     # should look at the blast result to identify the plasmid-related contigs
-#     # should look at the assembly graph to see which contigs belong to the same component (or plasmid)
-#     # Should make a nice report.
+function detect_plasmid ()
+{
+    # should be more elaborate than this...
+    # should look at the blast result to identify the plasmid-related contigs
+    # should look at the assembly graph to see which contigs belong to the same component (or plasmid)
+    # Should make a nice report.
 
-#     sample=$(cut -d "_" -f 1 <<< $(basename "$1"))
+    sample=$(cut -d "_" -f 1 <<< $(basename "$1"))
 
-#     if [[ -n $(cat "${qc}"/blast/$(basename "${1%.fasta}").blastn.tsv | grep -i "plasmid") ]]; then
-#         echo "Plasmid(s) detected in "$sample" assembly" \
-#             | tee -a "${logs}"/log.txt
+    if [[ -n $(cat "${qc}"/blast/"${sample}".bestHit.blastn.tsv | grep -i "plasmid") ]]; then
+        echo -e "Plasmid(s) detected in "$sample" assembly" \
+            | tee -a "${logs}"/log.txt
 
-#         # Create report for plasmid detection
-#         echo -e "Contig(s) from "$sample" assembly identified as plasmid:\n" \
-#             | tee -a "${qc}"/plasmid/"${sample}".txt
+        # Create report for plasmid detection
+        echo -e "Contig(s) from "$sample" assembly identified as plasmid:\n" \
+            | tee -a "${qc}"/plasmid/"${sample}".txt
         
-#         cat "${qc}"/blast/$(basename "${1%.fasta}").blastn.tsv \
-#             | grep -i "plasmid" \
-#             | cut -f 1,3 \
-#             | sort -u -k1,1 \
-#             | tee -a "${qc}"/plasmid/"${sample}".txt
-#     else
-#         echo "No plasmid detected in "$sample" assembly" \
-#             | tee -a "${logs}"/log.txt
-#     fi
-# }
+        cat "${qc}"/blast/"${sample}".bestHit.blastn.tsv \
+            | grep -i "plasmid" \
+            | cut -f 1,3 \
+            | sort -u -k1,1 \
+            | tee -a "${qc}"/plasmid/"${sample}".txt
+    else
+        echo "No plasmid detected in "$sample" assembly" \
+            | tee -a "${logs}"/log.txt
+    fi
+}
 
-# export -f detect_plasmid
+export -f detect_plasmid
 
-# find "$ordered" -type f -name "*_ordered.fasta" \
-#     | parallel  --bar \
-#                 --env detect_plasmid \
-#                 --env qc \
-#                 --jobs "$maxProc" \
-#                 'detect_plasmid {}'
+echo -e "##### Careful, sometimes phage sequences are identified as plasmids by BLAST ##### \n" \
+    | tee -a "${logs}"/log.txt
+    
+find "$ordered" -type f -name "*_ordered.fasta" \
+    | parallel  --bar \
+                --env detect_plasmid \
+                --env qc \
+                --jobs "$maxProc" \
+                'detect_plasmid {}'
 
 
 ### coverage ###
@@ -1189,6 +1229,41 @@ find "$ordered" -type f -name "*trimmed"${smallest_contig}"_ordered.fasta" | \
 
 #clean bwa index files
 find "$ordered" -type f ! -name "*.fasta" -exec rm {} \;
+
+
+# Qualimap
+function run_qualimap()
+{
+    sample=$(cut -d "." -f 1 <<< $(basename "$1"))
+    
+    [ -d "${qc}"/qualimap/"$sample" ] || mkdir -p "${qc}"/qualimap/"$sample"
+
+    qualimap bamqc \
+        --paint-chromosome-limits \
+        -bam "$1" \
+        --java-mem-size="${mem}"G \
+        -nt $((cpu/maxProc)) \
+        -outdir "${qc}"/qualimap/"$sample" \
+        -outfile "${sample}" \
+        -outformat HTML
+
+    # Remove bam files
+    # rm -rf "${qc}"/coverage/"$sample"
+}
+
+export -f run_qualimap
+
+find "${qc}"/coverage -type f -name "*.bam" |
+parallel    --bar \
+            --env run_qualimap \
+            --env qc \
+            --env mem \
+            --env cpu \
+            --env maxProc \
+            --jobs "$maxProc" \
+            'run_qualimap {}'
+
+
 
 
 ### quast ###
@@ -1472,30 +1547,39 @@ function annotate()
     echo -e ""$sample" hypothetical proteins (round1): $(cat "${annotation}"/"${sample}"/"${sample}".faa | grep -ic "hypothetical")" \
         | tee -a "${logs}"/log.txt
 
-    #make sure $BLASTDB is set in environment variables
-    # export BLASTDB=/media/3tb_hdd/db/nr:/media/3tb_hdd/db/nt
-    blastp -query "${annotation}"/"${sample}"/"${sample}"_hypoth.faa \
-        -db nr \
-        -outfmt '6 qseqid sseqid stitle pident length mismatch gapopen qstart qend sstart send evalue bitscore' \
-        -evalue 1e-30 \
-        -max_target_seqs 1 \
-        -max_hsps 1 \
-        -num_threads $((cpu/maxProc)) \
-        > "${annotation}"/"${sample}"/"${sample}"_hypoth.blastp
 
-    #Fetch the fasta entry of the hits that do not contain "hypothetical"
-    #Re-filter for evalues
-    cat "${annotation}"/"${sample}"/"${sample}"_hypoth.blastp | \
-        grep -viF "hypothetical" | \
-        awk '{if($12 < 1e-30) {print}}' | \
-        cut -f 2 | \
-        cut -d "|" -f4 \
-        > "${annotation}"/"${sample}"/accession.list
+    # Turns out that only getting one hit is a bad idea. Sometimes the best hit will be "hypotetical protein",
+    # but all the other ones will not be if allowed more than 1 hit per query.
+    # Using something like the Blast Desption Annotator in Blast2GO would work best.
 
-    #Download the sequences
-    perl "${scripts}"/http_post.pl \
-        "${annotation}"/"${sample}"/accession.list \
-        "${annotation}"/"${sample}"/extra_hits.fasta
+    # #make sure $BLASTDB is set in environment variables
+    # # export BLASTDB=/media/3tb_hdd/db/nr:/media/3tb_hdd/db/nt
+    # blastp -query "${annotation}"/"${sample}"/"${sample}"_hypoth.faa \
+    #     -db nr \
+    #     -outfmt '6 qseqid sseqid stitle pident length mismatch gapopen qstart qend sstart send evalue bitscore' \
+    #     -evalue 1e-10 \
+    #     -max_target_seqs 1 \
+    #     -max_hsps 1 \
+    #     -num_threads $((cpu/maxProc)) \
+    #     > "${annotation}"/"${sample}"/"${sample}"_hypoth.blastp
+
+    # #Fetch the fasta entry of the hits that do not contain "hypothetical"
+    # #Re-filter for evalues
+    # cat "${annotation}"/"${sample}"/"${sample}"_hypoth.blastp | \
+    #     grep -viF "hypothetical" | \
+    #     awk -F $'\t' 'BEGIN {OFS = FS} {if($12 < 1e-10) {print}}' | \
+    #     cut -f 2 | \
+    #     cut -d "|" -f4 \
+    #     > "${annotation}"/"${sample}"/accession.list
+
+    # #Download the sequences
+    # perl "${scripts}"/http_post.pl \
+    #     "${annotation}"/"${sample}"/accession.list \
+    #     "${annotation}"/"${sample}"/extra_hits.fasta
+
+    python3 "${scripts}"/bda.py \
+        -i "${annotation}"/"${sample}"/"${sample}"_hypoth.faa \
+        -o "${annotation}"/"${sample}"/extra_hits.fasta
 
     # Make first letter uppercase
     # remove duplicate entries
@@ -1547,37 +1631,116 @@ find "$ordered" -type f -name "*trimmed"${smallest_contig}"_ordered.fasta" | \
                 "annotate {}"
 
 
+###########
+#         #
+#   AMR   #
+#         #
+###########
+
+
 ### Resfinder
 
 function run_resfinder ()
 {
+    # https://bitbucket.org/genomicepidemiology/resfinder/overview
     sample=$(cut -d "_" -f 1 <<< $(basename "$1"))
 
-    [ -d "${amr}"/"${sample}"/"$resfinder_db" ] || mkdir -p "${amr}"/"${sample}"/"$resfinder_db"
+    [ -d "${amr}"/resfinder/"$sample" ] || mkdir -p "${amr}"/resfinder/"$sample"
 
-    perl "${prog}"/resfinder/resfinder.pl \
-        -d "${prog}"/resfinder/resfinder_db/ \
-        -a "$resfinder_db" \
+    python3 "${prog}"/resfinder/resfinder.py \
         -i "$1" \
-        -o "${amr}"/"$sample"/"$resfinder_db" \
-        -k 90 \
-        -l 60
+        -o "${amr}"/resfinder/"$sample" \
+        -p "${prog}"/resfinder/resfinder_db/ \
+        -t 0.9 \
+        -l 0.6 #\
+        # 1> >(tee "${amr}"/resfinder/"${sample}"/"${sample}"_resfinder.txt)
+
+    rm -rf "${amr}"/resfinder/"${sample}"/tmp
 }
 
 export -f run_resfinder
 
-for h in $(find "${prog}"/resfinder/resfinder_db -type f -name "*.fsa"); do
-    export resfinder_db=$(sed 's/\.fsa//' <<< $(basename "$h"))
+find "$ordered" -type f -name "*trimmed"${smallest_contig}"_ordered.fasta" | \
+    parallel    --env run_resfinder \
+                --env resfinder_db \
+                "run_resfinder {}"
 
-    find "$ordered" -type f -name "*trimmed"${smallest_contig}"_ordered.fasta" | \
-        parallel --env run_resfinder \
-            --env resfinder_db \
-            "run_resfinder {}"
+# Create merged report
+echo -e 'Sample\tResistance gene\tIdentity\tAlignment Length/Gene Length\tCoverage\tPosition in reference\tContig\tPosition in contig\tPhenotype\tAccession no.' \
+    > "${amr}"/resfinder/resfinder_merged.tsv.tmp
+    
+for i in $(find "${amr}"/resfinder -name "*results_tab.txt"); do
+    # sample name is folder name
+    sample=$(basename $(dirname "$i"))
+
+    # Add a leading column with sample name
+    cat "$i" \
+        | sed -e '1d' \
+        | awk -F $'\t' -v s="$sample" 'BEGIN {OFS = FS} {print s,$0}' \
+        >> "${amr}"/resfinder/resfinder_merged.tsv.tmp
 done
 
-#Check if any hit
-find "${amr}" -type f -name "results_tab.txt" \
-    -exec cat {} \; | sed -n '1d' | tee "${amr}"/resfinder_hits.txt
+# sort by sample name (column 1), then by Identity (column 3)
+(cat "${amr}"/resfinder/resfinder_merged.tsv.tmp | head -n 1;
+    cat "${amr}"/resfinder/resfinder_merged.tsv.tmp | sed -e '1d' | sort -t $'\t' -k1,1 -k3,3) \
+    > "${amr}"/resfinder/resfinder_merged.tsv
+
+rm "${amr}"/resfinder/resfinder_merged.tsv.tmp
+
+### RGI (CARD)
+
+function run_rgi()
+{
+    sample=$(cut -d "_" -f 1 <<< $(basename "$1"))
+
+    [ -d "${amr}"/rgi/"$sample" ] || mkdir -p "${amr}"/rgi/"$sample"
+
+    "${prog}"/rgi-4.2.2/./rgi main \
+        -i "$1" \
+        -o  "${amr}"/rgi/"${sample}"/"$sample" \
+        -t 'contig' \
+        -a 'BLAST' \
+        -n $((cpu/maxProc)) \
+        --clean \
+        -d "chromosome"
+}
+
+export -f run_rgi
+
+find "$ordered" -type f -name "*trimmed"${smallest_contig}"_ordered.fasta" \
+    | parallel    --bar \
+                --env run_rgi \
+                --env resfinder_db \
+                "run_rgi {}"
+
+# Create merged report
+echo -e 'Sample\tORF_ID\tContig\tStart\tStop\tOrientation\tCut_Off\tPass_Bitscore\tBest_Hit_Bitscore\tBest_Hit_ARO\tBest_Identities\tARO\tModel_typeSNPs_in_Best_Hit_ARO\tOther_SNPs\tDrug\tClass\tResistance\tMechanism\tAMR\tGene\tFamily\tPredicted_DNA\tPredicted_Protein\tCARD_Protein_Sequence\tPercentage_Length_of_Reference_Sequence\tID\tModel_ID' \
+    > "${amr}"/rgi/rgi_merged.tsv.tmp
+    
+for i in $(find "${amr}"/rgi -name "*.txt"); do
+    # sample name is folder name
+    sample=$(basename $(dirname "$i"))
+
+    # Add a leading column with sample name
+    cat "$i" \
+        | sed -e '1d' \
+        | awk -F $'\t' -v s="$sample" 'BEGIN {OFS = FS} {print s,$0}' \
+        >> "${amr}"/rgi/rgi_merged.tsv.tmp
+done
+
+# sort by Sample name (column 1), then by Cutt_off (column 7)
+(cat "${amr}"/rgi/rgi_merged.tsv.tmp | head -n 1;
+    cat "${amr}"/rgi/rgi_merged.tsv.tmp | sed -e '1d' | sort -t $'\t' -k1,1 -k7,7) \
+    > "${amr}"/rgi/rgi_merged.tsv
+
+rm "${amr}"/rgi/rgi_merged.tsv.tmp
+
+
+################
+#              #
+#   Prophage   #
+#              #
+################
 
 
 ### Phaster
@@ -1588,18 +1751,20 @@ function phaster_trim()
     sample=$(cut -d '_' -f 1 <<< $(basename "$1"))
 
     # http://phaster.ca/instructions
-    if [ $(cat "$1" | grep -Ec "^>") -gt 1 ]; then  # if more than one contig
-        #remove contigs smaller than 2000 bp from assembly
-        perl "${prog}"/phage_typing/removesmallscontigs.pl \
+    if [ $(cat "$1" | grep -Ec "^>") -gt 1 ]; then  # If more than one contig
+        # Remove contigs smaller than 2000 bp from assembly
+        perl "${scripts}"/removesmallscontigs.pl \
             2000 \
             "$1" \
             > "${phaster}"/assemblies/"${sample}"_trimmed2000.fasta
-    elif [ $(cat "$1" | grep -Ec "^>") -eq 1 ]; then  # if only one contig
-        #remove contigs smaller than 2000 bp from assembly
-        perl "${prog}"/phage_typing/removesmallscontigs.pl \
-            1500 \
-            "$1" \
-            > "${phaster}"/assemblies/"${sample}"_trimmed1500.fasta
+    elif [ $(cat "$1" | grep -Ec "^>") -eq 1 ]; then  # If only one contig
+        # Check if contig is at least 1500 bp
+        seqlen=$(cat "$1" | awk '!/^>/ {l+=length($0)} END {print l}')
+        if [ "$seqlen" -lt 1500 ]; then
+            echo "Assembly is one contig, but smaller than 1500bp! Skipping."
+        else
+            ln -s "$1" "${phaster}"/assemblies/"${sample}".fasta
+        fi
     else
         echo "No assembly for "$sample""  # Should not get here!
         exit 1
@@ -1631,11 +1796,41 @@ function phasterSubmit ()
 }
 
 # Submit to phaster sequencially
+counter=0
+total=$(find "${phaster}"/assemblies -type f -name "*.fasta" | wc -l)
 for i in $(find "${phaster}"/assemblies -type f -name "*.fasta"); do
+    let counter+=1
+    sample=$(cut -d '_' -f 1 <<< $(basename "$1"))
+    echo -ne "Submitting "${sample}" ("${counter}"/"${total}")"\\r
     phasterSubmit "$i"
 done
 
-python3 ~/scripts/checkPhasterServer.py -f "$phaster"
+python3 ~/scripts/checkPhasterServer.py \
+    --check \
+    -i "${phaster}"/assemblies \
+    -o "$phaster"
 
+
+function extract_fasta()
+{
+    sample=$(cut -d '_' -f 1 <<< $(basename "$1"))
+
+    #Only get the fasta file out of the zip
+    unzip -p \
+        -j "${phaster}"/"${sample}"_phaster.zip \
+        "phage_regions.fna" \
+        > "${phaster}"/"${sample}"_phages.fasta
+
+    #Add sample name and entry number to fasta header
+    sed -i "s/^>/>"${sample}"_/" "${phaster}"/"${sample}"_phages.fasta
+}
+
+export -f extract_fasta
+
+find "$phaster" -type f -name "*_phaster.zip" |
+parallel    --bar \
+            --env extract_fasta \
+            --env phaster \
+            'extract_fasta {}'
 
 #TODO -> wrap all relevant information in a nice PDF report

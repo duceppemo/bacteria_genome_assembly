@@ -17,11 +17,13 @@ class BDA(object):
         self.args = args
         if args.input:
             self.input = args.input
+
             if args.reference:
                 self.ref = args.reference
             else:
                 print("You must specify a reference database to use for BLAST if providing an input fasta file")
                 sys.exit(0)
+
         if args.output:
             self.output = args.output
         if args.xml:
@@ -61,6 +63,7 @@ class BDA(object):
             blast_handle = open(self.xml, 'r')
         else:
             blast_handle = self.run_blastn(self.input)
+
         self.parse_blast_output(blast_handle)
 
     def check_input_file(self, input_file):
@@ -129,6 +132,7 @@ class BDA(object):
         blastx = NcbiblastpCommandline(db=self.ref, query=query, evalue='1e-10',
                                        outfmt=5, max_target_seqs=20,
                                        num_threads=self.cpus)
+        
         (stdout, stderr) = blastx()
 
         if stderr:
@@ -270,6 +274,7 @@ if __name__ == '__main__':
     parser.add_argument('-t', '--threads', metavar='number',
                         required=False,
                         help='The number of threads to use during blast portion of script')
+
     # Get the arguments into an object
     arguments = parser.parse_args()
 
