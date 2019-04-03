@@ -17,6 +17,13 @@ class BDA(object):
         self.args = args
         if args.input:
             self.input = args.input
+
+            if args.reference:
+                self.ref = args.reference
+            else:
+                print("You must specify a reference database to use for BLAST if providing an input fasta file")
+                sys.exit(0)
+
         if args.output:
             self.output = args.output
         if args.xml:
@@ -55,7 +62,8 @@ class BDA(object):
             print("Parsing xml file...")
             blast_handle = open(self.xml, 'r')
         else:
-            blast_handle = self.run_blastn('nr', self.input)
+            blast_handle = self.run_blastn(self.input)
+
         self.parse_blast_output(blast_handle)
 
     def check_input_file(self, input_file):
@@ -108,7 +116,7 @@ class BDA(object):
 
         self.contigs_dict = SeqIO.to_dict(SeqIO.parse(f, format='fasta'))
 
-    def run_blastn(self, ref_db, query):
+    def run_blastn(self, query):
         """
         Perform blastn using biopython
         :param ref_db: A fasta file for which "makeblastdb' was already run
@@ -121,10 +129,10 @@ class BDA(object):
 
         print("Running blastp...")
 
-        ref_db = '/media/30tb_raid10/db/nr/nr'
-        blastx = NcbiblastpCommandline(db=ref_db, query=query, evalue='1e-10',
-                                           outfmt=5, max_target_seqs=20,
-                                           num_threads=self.cpus)
+        blastx = NcbiblastpCommandline(db=self.ref, query=query, evalue='1e-10',
+                                       outfmt=5, max_target_seqs=20,
+                                       num_threads=self.cpus)
+        
         (stdout, stderr) = blastx()
 
         if stderr:
@@ -256,6 +264,9 @@ if __name__ == '__main__':
                        help='Input fasta file to blast')
     group.add_argument('-x', '--xml', metavar='input.blastp.xml',
                        help='Blastp output file (xml format) of the input fasta')
+    parser.add_argument('-ref', '--reference',
+                        required=False,
+                        help='Full path to reference database you wish to use for BLAST. Only needed in tandem with -i')
     parser.add_argument('-o', '--output', metavar='output_bda.fasta',
                         required=False,
                         help='Annotated fasta file with useful descriptions'
