@@ -5,7 +5,6 @@ __version__ = '0.1.2'
 
 
 import os
-from nested_dict import nested_dict
 from Bio import SeqIO
 import os.path
 
@@ -16,21 +15,30 @@ class BDA(object):
         import multiprocessing
 
         self.args = args
-        self.input = args.input
-        self.output = args.output
-        self.xml = args.xml
+        if args.input:
+            self.input = args.input
+        if args.output:
+            self.output = args.output
+        if args.xml:
+            self.xml = args.xml
+        if args.threads:
+            self.threads = args.threads
 
         # Check input file
-        self.check_input_file(self.input)
+        if self.input:
+            self.check_input_file(self.input)
 
         # Check output file
-        self.check_output_file(self.output)
+        if self.output:
+            self.check_output_file(self.output)
 
         # Number of cpu
-        self.cpus = int(multiprocessing.cpu_count())
+        if args.threads:
+            self.cpus = args.threads
+        else:
+            self.cpus = int(multiprocessing.cpu_count())
 
         # Empty ata structures
-        self.blast_dict = nested_dict()
         self.contigs_dict = dict()
 
         # List of allowed file extensions
@@ -41,9 +49,13 @@ class BDA(object):
 
     def run(self):
         self.check_dependencies()
-        self.check_input_file(self.input)
-        self.parse_fasta(self.input)
-        blast_handle = self.run_blastn('nr', self.input)
+        if self.input:
+            self.parse_fasta(self.input)
+        if self.xml:
+            print("Parsing xml file...")
+            blast_handle = open(self.xml, 'r')
+        else:
+            blast_handle = self.run_blastn('nr', self.input)
         self.parse_blast_output(blast_handle)
 
     def check_input_file(self, input_file):
@@ -67,10 +79,14 @@ class BDA(object):
     def check_output_file(self, output_file):
         # Check if output file was provided
         if self.output:
-            # Check if output path exists, if not create it
-            out_folder = os.path.dirname(output_file)
-            if not os.path.exists(out_folder):
-                os.makedirs(out_folder)
+            if os.path.isdir(self.output):
+                print("-o argument {} is a directory. If using -o, it must be a desired file path.".format(self.output))
+                sys.exit()
+            else:
+                # Check if output path exists, if not create it
+                out_folder = os.path.dirname(output_file)
+                if not os.path.exists(out_folder):
+                    os.makedirs(out_folder)
         else:
             # Output file is equal to input file with "_bda" append
             input_path = os.path.dirname(self.input)
@@ -92,9 +108,6 @@ class BDA(object):
 
         self.contigs_dict = SeqIO.to_dict(SeqIO.parse(f, format='fasta'))
 
-    def parse_blast_xml(self, xml_file):
-        pass
-
     def run_blastn(self, ref_db, query):
         """
         Perform blastn using biopython
@@ -106,35 +119,31 @@ class BDA(object):
         from Bio.Blast.Applications import NcbiblastpCommandline
         from io import StringIO
 
-        if self.xml:
-            print("Parsing xml file...")
-            blast_handle = open(self.xml, 'r')
-        else:
-            print("Running blastp...")
+        print("Running blastp...")
 
-            ref_db = '/media/30tb_raid10/db/nr/nr'
-            blastx = NcbiblastpCommandline(db=ref_db, query=query, evalue='1e-10',
+        ref_db = '/media/30tb_raid10/db/nr/nr'
+        blastx = NcbiblastpCommandline(db=ref_db, query=query, evalue='1e-10',
                                            outfmt=5, max_target_seqs=20,
                                            num_threads=self.cpus)
-            (stdout, stderr) = blastx()
+        (stdout, stderr) = blastx()
 
-            if stderr:
-                raise Exception('There was a problem with the blast:\n{}'.format(stderr))
+        if stderr:
+            raise Exception('There was a problem with the blast:\n{}'.format(stderr))
 
-            # Search stdout for matches - if the term Hsp appears (the .find function will NOT
-            # return -1), a match has been found, and stdout is written to file
-            if stdout.find('Hsp') != -1:
-                # Dump xml output to file
-                # Output file is equal to input file with "_blastp.xml" at the enf
-                filename, input_ext = os.path.splitext(os.path.basename(self.input))
-                output_xml = os.path.dirname(self.output) + '/' + filename + '_blastp.xml'
-                with open(output_xml, 'w') as f:
-                    f.write(stdout)
+        # Search stdout for matches - if the term Hsp appears (the .find function will NOT
+        # return -1), a match has been found, and stdout is written to file
+        if stdout.find('Hsp') != -1:
+            # Dump xml output to file
+            # Output file is equal to input file with "_blastp.xml" at the enf
+            filename, input_ext = os.path.splitext(os.path.basename(self.input))
+            output_xml = os.path.dirname(self.output) + '/' + filename + '_blastp.xml'
+            with open(output_xml, 'w') as f:
+                f.write(stdout)
 
-                # Convert stdout (string; blastp output in xml format) to IO object
-                blast_handle = StringIO(stdout)
-            else:
-                raise Exception("No blast results found.")
+            # Convert stdout (string; blastp output in xml format) to IO object
+            blast_handle = StringIO(stdout)
+        else:
+            raise Exception("No blast results found.")
 
         return blast_handle
 
@@ -242,18 +251,20 @@ if __name__ == '__main__':
     parser = ArgumentParser(description='Blast Description Annotator'
                                         'Try to update protein description when the best blast hit returns'
                                         '"hypothetical protrein"')
-    parser.add_argument('-i', '--input', metavar='input.fasta',
-                        required=True,
-                        help='Input fasta file to blast')
-    parser.add_argument('-x', '--xml', metavar='input.blastp.xml',
-                        required=False,
-                        help='Blastp output file (xml format) of the input fasta')
+    group = parser.add_mutually_exclusive_group(required=True)
+    group.add_argument('-i', '--input', metavar='input.fasta',
+                       help='Input fasta file to blast')
+    group.add_argument('-x', '--xml', metavar='input.blastp.xml',
+                       help='Blastp output file (xml format) of the input fasta')
     parser.add_argument('-o', '--output', metavar='output_bda.fasta',
                         required=False,
                         help='Annotated fasta file with useful descriptions'
                              'Input file name appended with "_bda" will by used if no output file specified')
+    parser.add_argument('-t', '--threads', metavar='number',
+                        required=False,
+                        help='The number of threads to use during blast portion of script')
 
     # Get the arguments into an object
     arguments = parser.parse_args()
 
-    BDA(arguments)
+BDA(arguments)
